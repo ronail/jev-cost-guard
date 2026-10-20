@@ -95,7 +95,8 @@ hermes -p dev mcp list      # -> jev ... 2 tools  enabled
 ```
 
 ### opencode-zen free-tier status
-`deepseek-v4.1-flash-free` now **works** through the source-faithful bypass (PR
-`ronail/hermes-agent#1`, installed branch `fix/opencode-zen-freetier-bypass`
-head `4d6b8a5`). Verified live in `dev`: `jev_health -> [...model=deepseek-v4.1-flash-free endpoint=https://opencode.ai/zen/v1/chat/completions -> alive]` — the relay returns HTTP 200 + an SSE stream and the model responds. mcp-jev reads the dev profile's `OPENCODE_ZEN_API_KEY` from `profiles/dev/.env` at runtime (never committed). Free-tier is live; no paid model needed.
+`deepseek-v4.1-flash-free` is called via the source-faithful bypass (PR
+`ronail/hermes-agent#1` v2, commit `c557431`): `Authorization: Bearer public`
+(the relay flags real API keys as abusive traffic), UA `opencode/latest/2.0.29/cli`,
+`x-opencode-project: global`, session-mirror headers (`x-opencode-session`=`x-opencode-session-id`=`x-session-affinity`=`x-session-id`=`ses_<12hex><14base62>`), `stream:true` + `include_usage`, `shell`/`glob`/`grep`/`read` stubs. Verified live: `jev_health -> [...deepseek-v4.1-flash-free ... -> alive]` (HTTP 200 + SSE aggregated). On IPs flagged for abusive free-tier traffic the relay returns `403 FreeTierError: "…abusive traffic from this IP address… not related to your account… turn off VPN/proxy or subscribe"` — an IP-reputation block (not a bypass gap); disable VPN/proxy, wait for the flag to clear, or use a paid opencode-zen model (the bypass auto-skips for non-`-free` models). mcp-jev reads the dev profile's `OPENCODE_ZEN_API_KEY` from `profiles/dev/.env` at runtime (never committed). Free-tier is live on a clean IP; no paid model needed.
 

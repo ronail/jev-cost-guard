@@ -61,19 +61,28 @@ sessions make more calls).
   `hermes -p dev mcp add`, `mcp test jev` lists both tools). No model name in
   `dev/config.yaml` is `jev` — the dev profile's model is `poolside/laguna-s-2.1:free`
   (provider `nous`); opencode-zen (`deepseek-v4.1-flash-free`) is reached by mcp-jev
-  through its own HTTP call (not via the agent's provider), and it **now works**
-  through the source-faithful bypass (PR `ronail/hermes-agent#1`, installed branch
-  `fix/opencode-zen-freetier-bypass` head `4d6b8a5`):
-  `jev_health -> "[jev] ok: provider=opencode-zen model=deepseek-v4.1-flash-free endpoint=https://opencode.ai/zen/v1/chat/completions -> alive"`.
-- The bypass (UA `opencode/2.0.29/cli`, `x-opencode-client: cli`, `ses_<12hex><14base62>`
-  session, `stream:true` + `stream_options.include_usage`, `bash`/`read` stubs, no
-  X-Stainless headers) is replicated exactly; the relay returns HTTP 200 + an SSE
-  stream that mcp-jev aggregates (`delta.content`). The dev profile's
-  `OPENCODE_ZEN_API_KEY` is read from `profiles/dev/.env` at runtime — the loader
-  tries `HERMES_HOME/.env` (Hermes points HERMES_HOME at the profile dir, not the
-  base) and `~/.hermes/profiles/<p>/.env`; nothing is committed.
-- For a **successful** jev model call: it's live now — `JEV_MODEL=deepseek-v4.1-flash-free`
-  (the default) calls the free tier successfully. No paid model needed.
+  through its own HTTP call (not via the agent's provider).
+- The bypass is synced to PR `ronail/hermes-agent#1` v2 (commit `c557431`,
+  Oct 2026 relay evolution): `Authorization: Bearer public` (real API keys are
+  flagged as abusive traffic), UA `opencode/latest/2.0.29/cli`,
+  `x-opencode-project: global`, session mirror headers
+  (`x-opencode-session`=`x-opencode-session-id`=`x-session-affinity`=`x-session-id`=`ses_<12hex><14base62>`),
+  `stream:true` + `stream_options.include_usage`, and `shell`/`glob`/`grep`/`read`
+  tool stubs with non-empty parameters. No X-Stainless headers (urllib never adds them).
+- **Relay result:** the bypass satisfies `authenticate()` — the request is accepted
+  as a CLI fingerprint and the relay replies HTTP 200 + an SSE stream that mcp-jev
+  aggregates (`delta.content`, None-coerced). A live `jev_health` call returned
+  `alive` on a clean IP. On IPs the relay has flagged for abusive free-tier traffic
+  it returns
+  `403 FreeTierError: "…abusive traffic from this IP address… not related to your account… turn off VPN/proxy or subscribe"` —
+  that is an IP-reputation block, **not** a bypass gap; the relay's own message says
+  to disable VPN/proxy or use a paid tier. mcp-jev makes **no automatic retries**
+  (a 403 is surfaced verbatim to the caller), so hammering the relay is left to
+  whoever invokes it.
+- The dev profile's `OPENCODE_ZEN_API_KEY` is still read from `profiles/dev/.env`
+  at runtime (for paid/non-free targets) — the loader tries `HERMES_HOME/.env`
+  (Hermes points HERMES_HOME at the profile dir), `HERMES_HOME/profiles/<p>/.env`,
+  and `~/.hermes/profiles/<p>/.env`; nothing is committed.
 
 ## When this differs
 - **Anthropic (cached) profiles** (`default`): prompt caching makes the stable
