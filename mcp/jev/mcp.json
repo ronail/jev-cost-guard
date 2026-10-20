@@ -1,0 +1,15 @@
+[
+  {
+    "mcpServers": {
+      "jev": {
+        "command": "python3",
+        "args": ["/Users/ronail/Projects/jev-cost-guard/mcp/jev/server.py"],
+        "env": {
+          "JEV_ENDPOINT": "https://inference-api.nousresearch.com/v1/chat/completions",
+          "JEV_MODEL": "jev-token-guard-v0",
+          "JEV_API_KEY": "<set-via-env-never-in-repo>"
+        }
+      }
+    }
+  }
+]
