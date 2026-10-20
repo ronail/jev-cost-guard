@@ -6,14 +6,21 @@ replaces what *would* have been appended to the transcript.
 
 Wires into:
   - transform_terminal_output (terminal tool / background process output)
-  - transform_tool_result     (every other tool's final result string)
+  - transform_tool_result     (every tool's final result, before context)
+
+Contract note (from model_tools._apply_transform_tool_result_hook):
+a hook may only replace a result with a *str*; non-str returns are ignored.
+So structured (dict/list) results are JSON-stringified and capped the same way
+string results are — this is the docs' own "wrap long JSON tool responses" use
+case.
 """
 import os
+import json
 from pathlib import Path
 
 # Defaults. Tune via env if needed: JEV_MAX_BYTES, JEV_HEAD, JEV_TAIL, JEV_CACHE_ROOT
-DEFAULT_MAX = int(os.getenv("JEV_MAX_BYTES", 12_000))
-HEAD = int(os.getenv("JEV_HEAD", 6_000))
+DEFAULT_MAX = int(os.getenv("JEV_MAX_BYTES", 6_000))
+HEAD = int(os.getenv("JEV_HEAD", 4_000))
 TAIL = int(os.getenv("JEV_TAIL", 2_000))
 WORKSPACE = os.getenv("BH_AGENT_WORKSPACE") or os.getenv("HERMES_WORKSPACE") or "/tmp"
 CACHE_ROOT = Path(os.getenv("JEV_CACHE_ROOT", WORKSPACE)) / "cache" / "jev-context-guard"
@@ -45,6 +52,18 @@ def _spill(tool_name: str, result: str, budget: int) -> str:
     return summary
 
 
+def _as_text(result) -> str | None:
+    """Normalize a tool result to text for sizing. None if not representable."""
+    if isinstance(result, str):
+        return result
+    if isinstance(result, (dict, list)):
+        try:
+            return json.dumps(result, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def register(ctx):
     # Hook signatures per Hermes docs:
     #   transform_terminal_output(command, output, returncode, task_id, env_type, **kwargs) -> str|None
@@ -53,10 +72,18 @@ def register(ctx):
         return _spill("terminal", output or "", DEFAULT_MAX)
 
     def on_result(tool_name, args, result, task_id, **kwargs):
-        if not isinstance(result, str):
+        text = _as_text(result)
+        if text is None:
+            # not stringifiable (e.g. binary); leave it to Hermes' own handling
             return None
-        # only guard the noisy ones; read_file/web_extract already bounded by skills, but cap still applies
-        return _spill(tool_name or "tool", result, DEFAULT_MAX)
+        if "[jev-context-guard]" in text[:500]:
+            # already capped by transform_terminal_output (or an earlier pass) — don't re-cap
+            return None
+        capped = _spill(tool_name or "tool", text, DEFAULT_MAX)
+        if capped == text:
+            # under budget -> leave the original (dict) result type intact
+            return None
+        return capped
 
     ctx.register_hook("transform_terminal_output", on_terminal)
     ctx.register_hook("transform_tool_result", on_result)

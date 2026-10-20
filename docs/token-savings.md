@@ -1,52 +1,62 @@
 # jev-cost-guard — token-savings report (verified)
 
-Measured with `hermes prompt-size --json` on the `dev` profile (DeepSeek
-`deepseek-v4.1-flash-free`, **no** provider prompt-caching → full fixed prompt
-is charged every call). 7-day baseline from `hermes -p dev insights --days 7`.
+Measured on the `dev` profile (`poolside/laguna-s-2.1:free` via provider `nous`,
+no provider prompt-caching → full cost on every call). Two levers: a fixed-prompt
+shrink via config, and a variable runtime cap via the plugin.
 
-## Setup applied to `dev` (test run)
-- Installed 7 `jev-*` skills into `~/.hermes/profiles/dev/skills/jev/` (index
-  now lists them).
-- `agent.disabled_toolsets: [connections, tts, vision, clarify, browser-use]`
-- `skills.auto_load: []` — deliberately empty: on a non-cached/free-model
-  profile, auto-loading full skill bodies bloats every call. The jev skills stay
-  on-demand (`skill_view` from the index), which is what `jev-skill-gate`
-  prescribes.
-- `jev-context-guard` plugin enabled in `dev`.
+## Status on `dev` (current)
+- 6 `jev-*` skills installed in `~/.hermes/profiles/dev/skills/jev/` (index only,
+  on-demand — `skills.auto_load` left at its default `[]`).
+- `jev-context-guard` plugin **enabled**; runs in the gateway
+  ("`gateway_transforms` active"). Hooks fire for `transform_tool_result` +
+  `transform_terminal_output`.
+- `config.yaml` otherwise **pristine** (the earlier `agent.disabled_toolsets`
+  experiment was reverted on request). No toolset trimming is active right now.
 
-## Fixed-prompt delta (bytes = chars ≈ tokens × 3.9 for English)
+> Note on "the jev model": **no such model exists** in any profile config
+> (`deepseek`, `openrouter`, `anthropic`, `openai`, `nous`, `opencode` only).
+> The plugin's cap is pure Python string slicing — strictly cheaper than any
+> model-based summarization, which would *add* an LLM call. Savings are achieved
+> by the plugin + skills running in the dev session under its existing model.
 
-| metric | before | after | delta |
-|---|---:|---:|---:|
-| toolsets visible | 26 | 21 | −5 |
-| tool-schema JSON | 49,004 B | 36,849 B | **−12,155 B** |
+## Runtime savings (LIVE, in-session, model-quoted)
+
+Triggered by real tool calls; full bodies spilled to `$BH_AGENT_WORKSPACE/cache/jev-context-guard/`:
+
+| tool | input size | model received | saved | / ~3.9 tok | spill file |
+|---|---|---|---|---|---|
+| `web_extract` (docs page, char_limit 20000) | 21,305 B | ~6,240 B (head+tail) | ~15,085 B | **~3,862 tok** | 21,305 B |
+| `terminal` (`z`*15000 + newline) | 15,001 B | ~6,240 B (single cap) | ~8,781 B | **~2,252 tok** | 15,001 B |
+
+The model quoted the `[jev-context-guard]` marker verbatim in its reply, and the
+spill files on disk match the input sizes exactly. The double-cap that briefly
+occurred on terminal was fixed via the `if "[jev-context-guard]" in text[:500]`
+guard in the hook.
+
+Per-result saving scales with output size: anything >6 KB is capped to ~6.2 KB,
+so an N KB result costs the agent ~3,900 tokens of transcript regardless of N.
+
+## Fixed-prompt savings (available, gated by config — NOT currently applied on dev)
+
+When the user authorizes config edits, `agent.disabled_toolsets` restores the
+measured cut verified earlier:
+
+| metric | before (stock dev) | after (with toolsets trimmed) | delta |
+|---|---|---|---|
+| toolsets | 26 | 21 | −5 |
+| tool-schema JSON | 49,004 B | 36,849 B | −12,155 B |
 | system prompt | 24,770 B | 20,581 B | −4,189 B |
-| skills index | 7,379 B (82 skills) | 8,002 B (89 skills) | +623 B |
-| **fixed prompt / call** | **73,774 B ≈ 18,916 tok** | **57,430 B ≈ 14,726 tok** | **−16,344 B ≈ 4,191 tok/call** |
+| **fixed prompt / call** | **73,774 B ≈ 18,916 tok** | **57,430 B ≈ 14,726 tok** | **−4,191 tok/call (−22.2%)** |
 
-**Net: −22.2% fixed tokens per API call on `dev`.**
+7-day translation of the fixed-prompt cut at stock dev volume:
+`618 tool calls × 4,191 tok ≈ ≥2.58M input tokens / 7 days` (floor; real
+sessions make more calls).
 
-Notes on the small index growth (+623 B): adding 7 skill entries (~89 B each)
-is the ~25-token/call "rent" for the skills. Each `jev-context-firewall` or
-`jev-test-output-triage` call pays this back within one real session.
-
-## 7-day translation (`dev`)
-`hermes -p dev insights --days 7` → 58 sessions / 618 tool calls.
-Conservative floor at one fixed-prompt per tool call:
-
-> 618 × 4,191 ≈ **2.58M input tokens saved / 7 days** — before any runtime
-> spill savings.
-
-The `jev-context-guard` plugin adds a *variable* saving on top: any tool result
-> 12 KB is reduced to a 6 KB + 2 KB head/tail plus a file link. Proven by direct
-> invocation: a 20,000-char result → 8,220 chars returned, full body spilled.
-
-## Caveats / when this differs
+## When this differs
 - **Anthropic (cached) profiles** (`default`): prompt caching makes the stable
-  prefix ~0.1× on repeated calls, so the relative saving is smaller; prefer the
-  plugin + index-gate there.
+  prefix ~0.1× on repeated calls, so relative saving is smaller; the runtime
+  plugin cap still applies verbatim.
 - **`kanban` (26 KB ≈ 6.8k tok/call)** is absent from `dev`; it is the biggest
-  lever on `devops`/`planner`/`reviewer` (see README matrix) but is opt-in there
-  for those profiles' work.
+  lever on `devops`/`planner`/`reviewer` (see README matrix) but is opt-in there.
 - `skills.auto_load` full-body is cheap *only* on caching providers; on
-  free-model profiles keep it `[]` and skill_view on demand.
+  free-model profiles keep it `[]` and `skill_view` on demand.
