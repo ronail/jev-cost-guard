@@ -1,0 +1,8 @@
+[
+  { "name": "jev-skill-gate", "trigger": "before responding, check the skills index is under 2.5 KB; if a task doesn't match auto_load, open a fresh scoped session", "file": "../hermes/jev-skill-gate/SKILL.md" },
+  { "name": "jev-context-economy", "trigger": "per-call token hygiene: batch calls, grep-then-read, cap output, compress at boundaries", "file": "../hermes/jev-context-economy/SKILL.md" },
+  { "name": "jev-prompt-budget-audit", "trigger": "audit fixed prompt cost; cut one toolset/skill; re-measure under budget", "file": "../hermes/jev-prompt-budget-audit/SKILL.md" },
+  { "name": "jev-context-firewall", "trigger": "push bulk extraction/analysis off the main context; only digests return", "file": "../hermes/jev-context-firewall/SKILL.md" },
+  { "name": "jev-test-output-triage", "trigger": "run tests/logs through a summary reporter; only failures reach context", "file": "../hermes/jev-test-output-triage/SKILL.md" },
+  { "name": "jev-source-digest", "trigger": "web/page sources: extract bounded, file, digest in code, cite by line range", "file": "../hermes/jev-source-digest/SKILL.md" }
+]
