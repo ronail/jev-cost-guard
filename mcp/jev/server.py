@@ -192,12 +192,13 @@ def _jev_call(prompt: str, max_tokens: int = 512) -> str:
         raise RuntimeError("no jev endpoint: set JEV_ENDPOINT or JEV_PROVIDER=opencode-zen")
     if not model:
         raise RuntimeError("no jev model: set JEV_MODEL (or it defaults to deepseek-v4.1-flash-free)")
-    # Free-tier bypass (ronail/hermes-agent#1 v2): `*-free` models on opencode.zen
+    # Free-tier bypass (ronail/hermes-agent#1 v2, commit c557431): for `*-free`
+    # opencode-zen targets the relay overrides Authorization to "Bearer public"
+    # (Issue #49433 — real API keys are flagged as abusive traffic). So the key is
+    # only required for paid / non-opencode-zen targets; free opencode-zen works
+    # without any key in the subprocess env.
     is_free = "-free" in model.lower()  # matches hermes _is_opencode_free_tier_model
     on_opencode_zen = "opencode.ai/zen" in endpoint.lower()
-    # The relay flags real API keys as abusive traffic and rejects them; for the
-    # first-party CLI fingerprint it accepts "Bearer public" (no key needed on the
-    # free tier). A key is only required for paid / non-opencode-zen targets.
     if not (is_free and on_opencode_zen) and not key:
         raise RuntimeError(
             "no jev model key set: export OPENCODE_ZEN_API_KEY (or JEV_API_KEY) "
@@ -209,6 +210,7 @@ def _jev_call(prompt: str, max_tokens: int = 512) -> str:
         "max_tokens": max_tokens,
         "temperature": 0.2,
     }
+    # Default auth: key if available, else Bearer public (free tier, no key needed).
     headers = {
         "Authorization": f"Bearer {key}" if key else "Bearer public",
         "Content-Type": "application/json",
@@ -221,7 +223,7 @@ def _jev_call(prompt: str, max_tokens: int = 512) -> str:
         headers["x-opencode-session-id"] = sess
         headers["x-session-affinity"] = sess
         headers["x-session-id"] = sess
-        # free tier authenticates via the CLI fingerprint, not the real key
+        # free opencode-zen tier authenticates as the CLI fingerprint, NOT a key
         headers["Authorization"] = "Bearer public"
         body["stream"] = True
         body["stream_options"] = {"include_usage": True}
