@@ -73,3 +73,39 @@ Drop the files under `claude-code/` and `cursor/` respectively (see
 ## Why not just add more skills?
 Each skill in the index is permanent per-call overhead. This bundle *is* the
 minimal set that pays for itself.
+
+## Model-based path (`mcp/jev`)
+
+`mcp/jev/server.py` is a **zero-dependency (pure stdlib)** MCP server exposing
+`jev_health` and `jev_summarize`. `jev_summarize` compresses a large result body
+to a ~300-token digest via the configured model. It costs a tool round-trip, so it
+is **opt-in** (`JEV_MCP=1`) — the plugin's deterministic cap stays the default
+cheapest path.
+
+Mount it in a profile (reads that profile's own opencode-zen key from
+`profiles/<profile>/.env` at runtime — **never committed**):
+
+```bash
+hermes -p dev mcp add jev \
+  --command python3 \
+  --env JEV_PROVIDER=opencode-zen \
+  --env JEV_MODEL=deepseek-v4.1-flash-free \
+  --args /Users/ronail/Projects/jev-cost-guard/mcp/jev/server.py
+hermes -p dev mcp list      # -> jev ... 2 tools  enabled
+```
+
+### opencode-zen free-tier status
+`deepseek-v4.1-flash-free` currently returns
+`403 FreeTierError: "OpenCode's free tier can only be used from within OpenCode"`,
+**even with the full source-faithful bypass** (UA `opencode/2.0.29/cli`,
+`x-opencode-client: cli`, `ses_<12hex><14base62>` session, `stream:true`, `bash`+
+`read` tool stubs, X-Stainless stripped). This matches `dev/logs/agent.log`
+2026-10-17 23:03:05 — the relay's auth gate has evolved past the bypass PR
+(`ronail/hermes-agent#1`, still WIP). mcp-jev sends the dev profile's
+`OPENCODE_ZEN_API_KEY` and the request **reaches** `opencode.ai/zen/v1`, so wiring
+is correct; the relay is the blocker.
+
+For a **working** jev model call now: set `JEV_MODEL` to a **paid** opencode-zen
+model (the `-free` bypass auto-skips for non-free models). Free-tier works again
+once the relay accepts external clients.
+
