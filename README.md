@@ -40,7 +40,7 @@ Which `jev-*` skills apply to each profile (and why). Shared == every profile.
 
 | profile | purpose | shared skills | domain skills | plugin |
 |---|---|---|---|---|
-| `default` | orchestrator (Anthropic Sonnet) | skill-gate · context-economy · prompt-budget-audit · context-firewall | — | jev-context-guard |
+| `default` | orchestrator (Anthropic Sonnet) | skill-gate · context-economy · prompt-budget-audit · context-firewall · **delegate-guard** | — | jev-context-guard |
 | `dev` | local dev / story3d / DeepSeek | shared | test-output-triage | jev-context-guard |
 | `devops` | deploys & CI | shared | test-output-triage | jev-context-guard |
 | `planner` | decompose goals → steps, delegates | shared | source-digest | jev-context-guard |
