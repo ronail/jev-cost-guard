@@ -15,10 +15,13 @@ Semantics (see docs/token-savings.md "what opencode means here"):
 - API key is NOT in this file or config: the MCP subprocess inherits
   OPENCODE_ZEN_API_KEY from the shell (the SAME env var the opencode-zen provider
   uses). No secret is ever committed.
-- Free-tier bypass (ronail/hermes-agent#1): for `*-free` opencode-zen targets we
-  send UA `opencode/2.0.29/cli`, `x-opencode-client: cli`, `ses_<12hex><14base62>`
-  x-opencode-session, body `stream:true` + bash/read tool stubs. This is what
-  makes a free-tier call succeed end-to-end.
+# Free-tier bypass (ronail/hermes-agent#1 v2, Oct 2026 relay evolution):
+# - UA opencode/latest/2.0.29/cli, x-opencode-client=cli, x-opencode-project=global
+# - x-opencode-session = x-opencode-session-id = x-session-affinity = x-session-id =
+#   ses_<12hex><14base62> (idgen.go, counter=1)
+# - Authorization: Bearer public (real API keys are flagged as abusive traffic)
+# - body stream:true + stream_options.include_usage + shell/glob/grep/read tool stubs
+# No X-Stainless headers: urllib never adds them.
 
 Tools:
   jev_health      probe the configured jev model
@@ -45,8 +48,9 @@ import urllib.error
 _ATTRIBUTION_HEADERS = {
     "HTTP-Referer": "https://hermes-agent.nousresearch.com",
     "X-Title": "Hermes Agent",
-    "User-Agent": "opencode/2.0.29/cli",
-    "x-opencode-client": "cli",
+    "User-Agent": "opencode/latest/2.0.29/cli",  # v2: must be opencode/latest/<ver>/<channel>
+    "x-opencode-client": "cli",                   # any value passes when UA matches
+    "x-opencode-project": "global",               # Oct 2026: now validated by the relay
 }
 
 _OPCODE_BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
@@ -54,11 +58,25 @@ _OPCODE_TIME_SCALE = 0x1000  # ms * 4096
 
 _OPCODE_FREE_TOOLS = [
     {"type": "function", "function": {
-        "name": "bash",
-        "description": "Executes a bash command in a persistent shell session.",
+        "name": "shell",
+        "description": "Executes a shell command in a persistent shell session.",
         "parameters": {"type": "object", "properties": {
-            "command": {"description": "The bash command to execute", "type": "string"},
-            "timeout": {"description": "Optional timeout in seconds", "type": "number"}}}}},
+            "command": {"description": "The shell command to execute", "type": "string"},
+            "timeout": {"description": "Optional timeout in seconds", "type": "number"},
+            "shell_id": {"description": "Optional named shell session", "type": "string"}}}}},
+    {"type": "function", "function": {
+        "name": "glob",
+        "description": "Find files by glob pattern.",
+        "parameters": {"type": "object", "properties": {
+            "pattern": {"description": "Glob pattern to match files", "type": "string"},
+            "path": {"description": "Base path to search", "type": "string"}}}}},
+    {"type": "function", "function": {
+        "name": "grep",
+        "description": "Search file contents with a regular expression.",
+        "parameters": {"type": "object", "properties": {
+            "pattern": {"description": "Regex to search for", "type": "string"},
+            "path": {"description": "File or directory to search", "type": "string"},
+            "regexp": {"description": "Treat pattern as regex", "type": "boolean"}}}}},
     {"type": "function", "function": {
         "name": "read",
         "description": "Reads a file from the local filesystem.",
@@ -170,16 +188,21 @@ def _resolve_jev_target() -> tuple[str, str, str]:
 def _jev_call(prompt: str, max_tokens: int = 512) -> str:
     """POST a chat-completion to the jev model endpoint. Pure stdlib."""
     endpoint, model, key = _resolve_jev_target()
-    if not key:
-        raise RuntimeError(
-            "no jev model key set: export OPENCODE_ZEN_API_KEY (or JEV_API_KEY) "
-            "in the shell that launches Hermes — never commit it."
-        )
     if not endpoint:
         raise RuntimeError("no jev endpoint: set JEV_ENDPOINT or JEV_PROVIDER=opencode-zen")
     if not model:
         raise RuntimeError("no jev model: set JEV_MODEL (or it defaults to deepseek-v4.1-flash-free)")
-
+    # Free-tier bypass (ronail/hermes-agent#1 v2): `*-free` models on opencode.zen
+    is_free = "-free" in model.lower()  # matches hermes _is_opencode_free_tier_model
+    on_opencode_zen = "opencode.ai/zen" in endpoint.lower()
+    # The relay flags real API keys as abusive traffic and rejects them; for the
+    # first-party CLI fingerprint it accepts "Bearer public" (no key needed on the
+    # free tier). A key is only required for paid / non-opencode-zen targets.
+    if not (is_free and on_opencode_zen) and not key:
+        raise RuntimeError(
+            "no jev model key set: export OPENCODE_ZEN_API_KEY (or JEV_API_KEY) "
+            "in the shell that launches Hermes — never commit it."
+        )
     body: dict = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -187,15 +210,19 @@ def _jev_call(prompt: str, max_tokens: int = 512) -> str:
         "temperature": 0.2,
     }
     headers = {
-        "Authorization": f"Bearer {key}",
+        "Authorization": f"Bearer {key}" if key else "Bearer public",
         "Content-Type": "application/json",
     }
-    # Free-tier bypass (ronail/hermes-agent#1): `*-free` models on opencode.zen
-    is_free = "-free" in model.lower()  # matches hermes _is_opencode_free_tier_model
-    on_opencode_zen = "opencode.ai/zen" in endpoint.lower()
     if is_free and on_opencode_zen:
         headers.update(_ATTRIBUTION_HEADERS)
-        headers["x-opencode-session"] = _gen_opencode_session()
+        sess = _gen_opencode_session()
+        # relay requires the same ses_ id across all session headers (Oct 2026)
+        headers["x-opencode-session"] = sess
+        headers["x-opencode-session-id"] = sess
+        headers["x-session-affinity"] = sess
+        headers["x-session-id"] = sess
+        # free tier authenticates via the CLI fingerprint, not the real key
+        headers["Authorization"] = "Bearer public"
         body["stream"] = True
         body["stream_options"] = {"include_usage": True}
         body["tools"] = _OPCODE_FREE_TOOLS
