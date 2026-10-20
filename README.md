@@ -34,6 +34,25 @@ Per skill: ~25 tokens/call are paid for the index entry. These pay off only if a
 skill saves ≥1k tokens in a session — which the runtime skills do, and the
 **plugin** pays off because it adds zero prompt tokens.
 
+## Profile → skills matrix
+
+Which `jev-*` skills apply to each profile (and why). Shared == every profile.
+
+| profile | purpose | shared skills | domain skills | plugin |
+|---|---|---|---|---|
+| `default` | orchestrator (Anthropic Sonnet) | skill-gate · context-economy · prompt-budget-audit · context-firewall | — | jev-context-guard |
+| `dev` | local dev / story3d / DeepSeek | shared | test-output-triage | jev-context-guard |
+| `devops` | deploys & CI | shared | test-output-triage | jev-context-guard |
+| `planner` | decompose goals → steps, delegates | shared | source-digest | jev-context-guard |
+| `product` | PRD/spec authoring, delegates research | shared | source-digest | jev-context-guard |
+| `researcher` | research & summaries | shared | source-digest | jev-context-guard |
+| `reviewer` | code review + test verification | shared | test-output-triage + source-digest | jev-context-guard |
+| `tester` | test execution | shared | test-output-triage | jev-context-guard |
+
+> Profiles that run **kanban daily** (devops/planner/reviewer by default) should re-add `kanban` to `agent.disabled_toolsets` only when not dispatching; it is the single biggest lever at 26 KB (~6.8k tokens) per call.
+
+`reviewer` loads both domains because it runs tests and consumes research pages. Drop whichever half a profile never exercises.
+
 ## Install
 
 ### Hermes
