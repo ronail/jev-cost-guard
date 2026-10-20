@@ -1,0 +1,12 @@
+name: jev-context-guard
+version: 1.0.0
+author: ronail/jev-cost-guard
+license: MIT
+description: >
+  Progressive tool-result guard. Caps single tool results that exceed a byte
+  budget (default 12 KB) to a head+tail summary, spilling the full body to
+  $BH_AGENT_WORKSPACE/cache/jev-context-guard. Runs as a Hermes plugin hook —
+  zero prompt tokens because hooks execute outside the cached system prompt.
+provides_hooks:
+  - transform_result   # implemented via register_hook('transform_tool_result')
+  - transform_terminal # implemented via register_hook('transform_terminal_output')

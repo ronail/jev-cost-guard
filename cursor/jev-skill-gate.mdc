@@ -1,0 +1,5 @@
+---
+description: jev-skill-gate — trim the skills index to only what the task needs
+globs: ["**/*"]
+---
+Before replying, check the loaded skills index is under 2.5 KB (`hermes prompt-size --json | jq '.skills_index.bytes'`). If the current task doesn't map to a skill in `skills.auto_load`, open a fresh scoped session (`hermes -p <profile> chat -s <needed> -s <needed2>`) instead of letting an unrelated skill ride in.
