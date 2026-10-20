@@ -4,3 +4,4 @@ Default spill target for the `jev-context-guard` plugin and the
 `jev-source-digest` / `jev-test-output-triage` skill procedures.
 Resolved at runtime from `$BH_AGENT_WORKSPACE`.
 /.jev-context-guard/
+**/__pycache__/
