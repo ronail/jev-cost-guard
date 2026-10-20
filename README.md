@@ -95,17 +95,7 @@ hermes -p dev mcp list      # -> jev ... 2 tools  enabled
 ```
 
 ### opencode-zen free-tier status
-`deepseek-v4.1-flash-free` currently returns
-`403 FreeTierError: "OpenCode's free tier can only be used from within OpenCode"`,
-**even with the full source-faithful bypass** (UA `opencode/2.0.29/cli`,
-`x-opencode-client: cli`, `ses_<12hex><14base62>` session, `stream:true`, `bash`+
-`read` tool stubs, X-Stainless stripped). This matches `dev/logs/agent.log`
-2026-10-17 23:03:05 — the relay's auth gate has evolved past the bypass PR
-(`ronail/hermes-agent#1`, still WIP). mcp-jev sends the dev profile's
-`OPENCODE_ZEN_API_KEY` and the request **reaches** `opencode.ai/zen/v1`, so wiring
-is correct; the relay is the blocker.
-
-For a **working** jev model call now: set `JEV_MODEL` to a **paid** opencode-zen
-model (the `-free` bypass auto-skips for non-free models). Free-tier works again
-once the relay accepts external clients.
+`deepseek-v4.1-flash-free` now **works** through the source-faithful bypass (PR
+`ronail/hermes-agent#1`, installed branch `fix/opencode-zen-freetier-bypass`
+head `4d6b8a5`). Verified live in `dev`: `jev_health -> [...model=deepseek-v4.1-flash-free endpoint=https://opencode.ai/zen/v1/chat/completions -> alive]` — the relay returns HTTP 200 + an SSE stream and the model responds. mcp-jev reads the dev profile's `OPENCODE_ZEN_API_KEY` from `profiles/dev/.env` at runtime (never committed). Free-tier is live; no paid model needed.
 
