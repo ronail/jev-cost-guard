@@ -12,6 +12,7 @@ The cost figures are from `hermes prompt-size --json` on the 8 stock profiles
 | `jev-context-economy` | ~40 | ALL 8 | every-call token hygiene |
 | `jev-prompt-budget-audit` | ~35 | ALL 8 | fixed-prompt audit loop |
 | `jev-context-firewall` | ~45 | ALL 8 | delegate bulk output off the main transcript |
+| `jev-delegate-guard` | ~40 | ALL 8 (orchestrators) | pick leanest child profile + break-even gate |
 | `jev-test-output-triage` | ~50 | dev, devops, tester, reviewer | test/log bloat |
 | `jev-source-digest` | ~50 | researcher, product, planner, reviewer | web/page bloat |
 
@@ -34,6 +35,7 @@ skills:
     - jev-context-economy
     - jev-prompt-budget-audit
     - jev-context-firewall
+    - jev-delegate-guard
 agent:
   # cut the fat the audit skill finds; kanban only if this profile runs kanban tasks
   disabled_toolsets: [kanban, connections, tts, vision, browser-use]
