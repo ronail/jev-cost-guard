@@ -18,6 +18,15 @@ The cost figures are from `hermes prompt-size --json` on the 8 stock profiles
 
 
 
+## Companion: the jev-mcp-model-server skill
+
+This is the usage guide for the MCP itself — not an auto-loaded cost guard. It ships
+under `hermes/jev-mcp-model-server/`: `SKILL.md` (systemone procedure + auth),
+`templates/mcp-stdlib-skeleton.py` (a working, stdlib-only systemone stub to copy),
+and `references/opencode-zen-free-bypass.md` (auth + failure-mode matrix). Install it
+into a profile when the agent must drive `jev-1.13-free` via `mcp/jev/server.py`
+rather than a direct relay call.
+
 ## Wiring per profile (config.yaml)
 
 ### Shared block — every profile
