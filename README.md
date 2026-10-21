@@ -5,8 +5,9 @@ attacks the two real token leak classes visible in `hermes prompt-size`:
 
 1. **The fixed prompt is re-sent on every API call.** Tool schemas + the skills index
    are the fat. → pruned/audited by `jev-skill-gate` / `jev-prompt-budget-audit`.
-2. **Tool output bloats the transcript.** → flagged by the `jev-1.13-free` model via
-   the `mcp/jev` MCP server.
+2. **Tool output bloats the transcript.** → auto-gated by `jev-1.13-free` through the
+   `jev-cost-guard` hook plugin (replaces oversized results with a ~7-token `noul`
+   verdict), or judged on-demand via the `mcp/jev` MCP.
 
 > The deterministic head+tail *plugin* (`jev-context-guard`) was removed — it is not
 > a jev-model feature. The model-based decision below is the only trimming lever.
@@ -69,6 +70,11 @@ failure modes) are documented in `mcp/jev/env.example` and the server docstring.
 answers). `jev_summarize` does **not** generate prose — it asks jev a binary `noul`
 question over a result `state` and returns a **success probability**, which is what
 you `budget_tokens`-gate on. jev is a decision model, not a summarizer.
+
+> The repo also ships the **`jev-cost-guard` hook plugin**, which *automatically*
+> gates oversized tool results (`transform_tool_result` → `jev-1.13-free` verdict)
+> so bloat is trimmed without the agent asking. Install it inactive, tune first,
+> then enable — see [jev-cost-guard plugin](#jev-cost-guard-plugin).
 
 ---
 
