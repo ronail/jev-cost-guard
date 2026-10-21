@@ -118,6 +118,23 @@ Two measured, non-negotiable facts:
    bodies here are all synthetic success output, so a high noul (0.84–0.90) is the
    correct answer; it is not stuck at 0 or 1.
 
+### Reproduced via the `jev-mcp-model-server` skill (dev profile)
+
+Running the skill's shipped reference client
+(`hermes/jev-mcp-model-server/templates/mcp-stdlib-skeleton.py` → `_ask`,
+`Authorization: Bearer <key>` from `profiles/dev/.env`) — i.e. the same `noul` judgment
+a dev profile drives through `jev_summarize` — the verdict the agent **persists** stays
+constant as the body grows (the agent keeps just the `noul`, ~7 tokens, vs. re-sending
+the whole body every later call; jev's full billed output is the ~24 in the table above):
+
+| body (chars) | ~body tokens | verdict kept | noul |
+|---|---|---|---|
+| 8,000 | ~2,000 | **~7 tokens** | 0.77 |
+| 20,000 | ~5,000 | **~7 tokens** | 0.88 |
+
+A ~5,000-token result collapses to a 7-token `noul` probability — the transcript no
+longer re-sends the body on later calls.
+
 Net saving: `jev_summarize` costs `~(1.7×body + ~300)` **once**; persisting the
 ~24-token verdict instead of the body saves `(body − 24)` tokens on **every subsequent
 call**. For a 4,000-char (~1,000-token) body carried across 5 later model calls:
