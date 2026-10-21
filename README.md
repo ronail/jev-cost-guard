@@ -75,34 +75,55 @@ you `budget_tokens`-gate on. jev is a decision model, not a summarizer.
 ## Token savings methodology
 
 `jev-1.13-free` is an opencode-zen **System One *decision* model**: it does not
-generate text, it scores a `questions` set over a `state` and returns `noul` /
-`choice` / `score` probabilities plus a `usage` object.
+generate text, it scores a `noul`/`choice`/`score` question over a `state` and
+returns a probability + a `usage` object. The leak class below is **tool-output
+bloat** — a large result body is re-sent on every subsequent model call, because it
+lives in the transcript.
 
-| path | cost |
+| path | what you keep in the transcript |
 |---|---|
-| Re-paste the result body + regenerate, to judge "did it succeed?" | the **whole result body** re-sent as history |
-| One jev `noul` decision instead | **~312 tokens** (measured usage, see below) |
+| Re-paste the result body to judge "did it succeed?" | the **whole result body** (re-sent every call) |
+| One `jev_summarize` verdict instead | **~24 tokens** (the noul probability) |
 
-The crossover is one call: a ~312-token decision pays for itself against any result
-≥ ~313 tokens.
+`jev_summarize` **reads the body once** (so its input scales with the body — see the
+measurements), but its **output — the verdict you persist — is a constant ~24 tokens**.
+That is the lever: replace a body you would re-send `N` times with a one-time ~24-token
+verdict. Break-even vs. keeping the body is ~2–3 subsequent calls for real result
+sizes; the bigger the body, the faster it pays off.
 
 ---
 
 ## Test results (token-saving evidence)
 
-Measured live against `https://opencode.ai/zen/v1/systemone` (no key,
-`Bearer public`, desktop UA), each System One decision returns a probability **plus
-its own `usage`** — the full token cost of one judgment:
+Measured through the **dev profile** — real `OPENCODE_ZEN_API_KEY` (from
+`profiles/dev/.env`), `Authorization: Bearer <key>`, desktop `User-Agent`, at
+`https://opencode.ai/zen/v1/systemone`, model `jev-1.13-free` (jev is the only model in
+scope — no fallback). Each row is one `jev_summarize` call: a `noul` "is the above
+tool-result successful?" question over a synthetic tool-output body of the stated size.
+The relay returns its own `usage`, so the full cost of one judgment is visible.
 
-| jev call | input | output | total |
-|---|---|---|---|
-| `noul` reachability (`is_reachable`) | 290 | 23 | ~313 |
-| `noul` liveness (`is_alive`) | 291 | 21 | ~312 |
+| body (chars) | ~body tokens | input_tokens | output_tokens | noul |
+|---|---|---|---|---|
+| 200 | ~50 | 366 | **24** | 0.87 |
+| 1,000 | ~250 | 702 | **24** | 0.90 |
+| 4,000 | ~1,000 | 1,961 | **24** | 0.89 |
+| 20,000 | ~5,000 | 8,678 | **24** | 0.84 |
 
-A single `jev_summarize` replaces the "re-paste the result + ask again" path with a
-fixed ~312-token decision. Savings per judgment = `(re-pasted result size) − (~312)`,
-realized once, for any result worth a judgment (≥ ~400 tokens, the common case for
-tool output). No other model is involved.
+Two measured, non-negotiable facts:
+
+1. **Input scales with the body** (~`1.7×body + ~280`) — jev reads and bills the full
+   state. The "a jev decision costs a flat ~312 tokens" assumption is **false** for
+   real results; ~312 was only the tiny `is_reachable` probe (no body).
+2. **Output is constant ~24 tokens** — the noul verdict — and it is calibrated: the
+   bodies here are all synthetic success output, so a high noul (0.84–0.90) is the
+   correct answer; it is not stuck at 0 or 1.
+
+Net saving: `jev_summarize` costs `~(1.7×body + ~300)` **once**; persisting the
+~24-token verdict instead of the body saves `(body − 24)` tokens on **every subsequent
+call**. For a 4,000-char (~1,000-token) body carried across 5 later model calls:
+keep-body ≈ 5,000 tokens vs summarize-once + verdict ≈ 1,985 + 5×24 = ~2,105 →
+**saves ~2,900 tokens**. Break-even is ~2 subsequent calls; the bigger the body, the
+faster it pays off. No other model is involved.
 
 ---
 
