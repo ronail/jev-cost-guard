@@ -1,114 +1,92 @@
 #!/usr/bin/env python3
 """
-mcp-jev — zero-dependency MCP server exposing a "jev" model for token saving.
+mcp-jev — zero-dependency MCP server exposing the `jev` model for token saving.
 
-Pure stdlib (no `mcp` / no `pydantic`) so it runs as a Hermes MCP subprocess
-(`python3`) with zero pip installs. Speaks MCP stdio JSON-RPC minimally
+Pure stdlib (no `mcp` / no `pydantic`) so it runs as a Hermes MCP stdio subprocess
+(`python3`) with zero pip installs. Speaks minimal MCP stdio JSON-RPC
 (initialize / tools/list / tools/call).
 
-Goal (user directive): use the opencode-zen endpoint + the dev profile's opencode
-API key to achieve token saving in the hermes `dev` profile.
+Goal (user directive): use the opencode-zen free `jev-1.13-free` model with the
+dev profile's API key to achieve token saving in the hermes `dev` profile.
 
-Semantics (see docs/token-savings.md "what opencode means here"):
-- opencode-zen relay = https://opencode.ai/zen/v1 ; free model = deepseek-v4.1-flash-free.
-  Hermes masks the base_url as `https://n/v1` in logs.
-- API key is NOT in this file or config: the MCP subprocess inherits
-  OPENCODE_ZEN_API_KEY from the shell (the SAME env var the opencode-zen provider
-  uses). No secret is ever committed.
-# Free-tier bypass (ronail/hermes-agent#1 v2, Oct 2026 relay evolution):
-# - UA opencode/latest/2.0.29/cli, x-opencode-client=cli, x-opencode-project=global
-# - x-opencode-session = x-opencode-session-id = x-session-affinity = x-session-id =
-#   ses_<12hex><14base62> (idgen.go, counter=1)
-# - Authorization: Bearer {key} when a key is present (real keys are accepted by the
-#   relay — verified HTTP 200 — and are NOT flagged; fall back to the anonymous
-#   "Bearer public" CLI fingerprint only when no key is set)
-# - body stream:true + stream_options.include_usage + shell/glob/grep/read tool stubs
-# No X-Stainless headers: urllib never adds them.
+What `jev-1.13-free` IS (verified against the relay, Oct 2026):
+- It is an OpenCode Zen System One DECISION model (TypeSafe AI), NOT a chat
+  completion model. It does not generate text/digests. It evaluates a `state`
+  against typed questions and returns calibrated probabilities/values:
+      yes/no  -> `noul`  (probability in [0,1])
+      choice  -> `choice` (picked option + per-option probs)
+      score   -> `score`  (rubric scores)
+- Endpoint: https://opencode.ai/zen/v1/systemone
+  (NOT /chat/completions and NOT /inference/systemone — that path 403/1010s).
+- Auth: `Authorization: Bearer <OPENCODE_API_KEY>`. A real key is REQUIRED:
+  anonymous / no-key -> 403 FreeTierError ("...can only be used within OpenCode").
+- Relay fingerprint: without the OpenCode desktop UA the relay returns HTTP
+  403 error code 1010. Required headers:
+      User-Agent: opencode/1.18.31
+      x-opencode-client: desktop
+      x-opencode-project: global
+- Free tier is gated to the free model id `jev-1.13-free` (paid `jev-1.13` uses
+  the same key).
+- jev does NOT support the OpenAI chat-completions protocol (the deepseek path at
+  /zen/v1/chat/completions is a DIFFERENT free model — not jev).
+
+Token saving: jev answers a structured yes/no/choice/score question in ~21
+output tokens. Use it to GATE / triage large tool results with a cheap oracle
+instead of feeding the full text through an LLM. It cannot emit text digests,
+so jev_summarize returns a probability signal (see its description).
+
+The API key is NOT in this file or config. The MCP subprocess reads
+OPENCODE_API_KEY / OPENCODE_ZEN_API_KEY from ~/.hermes/profiles/dev/.env (the same
+credential the opencode-zen provider uses). No secret is ever committed
+(JEV_DEBUG=1 prints key presence/path only, never values).
 
 Tools:
-  jev_health      probe the configured jev model
-  jev_summarize   compress a large result body to a ~budget-token digest
+  jev_health      probe jev reachability via a `noul` question (alive iff jev
+                  returns a calibrated answer).
+  jev_summarize   query jev for a success/failure probability over a text `state`
+                  (~21 output tokens). Cheap gating signal, NOT a text digest;
+                  jev is a decision model and cannot summarize to tokens.
+Config:
+  JEV_MODEL     model id (default jev-1.13-free).
+  JEV_ENDPOINT  override the systemone endpoint.
+  JEV_API_KEY / OPENCODE_ZEN_API_KEY / OPENCODE_API_KEY  bearer key
+                  (else read from the dev profile .env).
+  JEV_DEBUG=1   print relay probe diagnostics.
 """
 from __future__ import annotations
 
 import json
 import os
-import random
-import string
 import sys
-import time
-import urllib.request
 import urllib.error
+import urllib.request
 
-# ── opencode-zen free-tier bypass (byte-faithful to hermes-agent source) ─────────
-# Source: agent/opencode_affinity.py (_generate_opencode_session_id) +
-# agent/chat_completion_helpers.py (_OPCODE_FREE_TOOLS, _apply_opencode_free_tier_hacks).
-# The relay's authenticate() checks the request body for `stream:true` and `tools`
-# containing `bash` and `read`, UA "opencode/<ver>/cli", and a ses_ session id.
-# Verified LIVE (dev profile): this bypass passes the relay and returns a model
-# result — jev_health -> "alive" (see docs/token-savings.md; PR ronail/hermes-agent#1).
-_ATTRIBUTION_HEADERS = {
+_ZEN_BASE = "https://opencode.ai/zen/v1"
+_DEFAULT_JEV_MODEL = "jev-1.13-free"
+_DEFAULT_ENDPOINT = f"{_ZEN_BASE}/systemone"
+
+# Required OpenCode desktop fingerprint for the jev free tier. Without these the
+# relay returns HTTP 403 error code 1010. A real API key is sent as the bearer
+# token (the free model is NOT reachable anonymously -> 403 FreeTierError).
+_SYSTEMONE_HEADERS = {
+    "User-Agent": "opencode/1.18.31",
+    "x-opencode-client": "desktop",
+    "x-opencode-project": "global",
+    "Content-Type": "application/json",
+    "Accept": "application/json",
     "HTTP-Referer": "https://hermes-agent.nousresearch.com",
     "X-Title": "Hermes Agent",
-    "User-Agent": "opencode/latest/2.0.29/cli",  # v2: must be opencode/latest/<ver>/<channel>
-    "x-opencode-client": "cli",                   # any value passes when UA matches
-    "x-opencode-project": "global",               # Oct 2026: now validated by the relay
 }
-
-_OPCODE_BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-_OPCODE_TIME_SCALE = 0x1000  # ms * 4096
-
-_OPCODE_FREE_TOOLS = [
-    {"type": "function", "function": {
-        "name": "shell",
-        "description": "Executes a shell command in a persistent shell session.",
-        "parameters": {"type": "object", "properties": {
-            "command": {"description": "The shell command to execute", "type": "string"},
-            "timeout": {"description": "Optional timeout in seconds", "type": "number"},
-            "shell_id": {"description": "Optional named shell session", "type": "string"}}}}},
-    {"type": "function", "function": {
-        "name": "glob",
-        "description": "Find files by glob pattern.",
-        "parameters": {"type": "object", "properties": {
-            "pattern": {"description": "Glob pattern to match files", "type": "string"},
-            "path": {"description": "Base path to search", "type": "string"}}}}},
-    {"type": "function", "function": {
-        "name": "grep",
-        "description": "Search file contents with a regular expression.",
-        "parameters": {"type": "object", "properties": {
-            "pattern": {"description": "Regex to search for", "type": "string"},
-            "path": {"description": "File or directory to search", "type": "string"},
-            "regexp": {"description": "Treat pattern as regex", "type": "boolean"}}}}},
-    {"type": "function", "function": {
-        "name": "read",
-        "description": "Reads a file from the local filesystem.",
-        "parameters": {"type": "object", "properties": {
-            "filePath": {"description": "The path to the file to read", "type": "string"},
-            "offset": {"description": "Line number to start reading from (0-based)", "type": "number"},
-            "limit": {"description": "Number of lines to read", "type": "number"}}}}},
-]
-
-
-def _gen_opencode_session() -> str:
-    """Replicate OpenCode idgen.go Session(): ses_<12hex><14base62>, counter=1."""
-    import secrets as _secrets
-    ms = time.time_ns() // 1_000_000
-    counter = 1
-    inverted = (~((ms * _OPCODE_TIME_SCALE) + counter)) & ((1 << 48) - 1)
-    hex_part = f"{inverted:012x}"
-    rand_part = "".join(_secrets.choice(_OPCODE_BASE62) for _ in range(14))
-    return f"ses_{hex_part}{rand_part}"
 
 
 def _load_profile_env_key(profile: str = "dev") -> str | None:
-    """Read OPENCODE_ZEN_API_KEY (or JEV_API_KEY) from the dev profile's .env.
+    """Read OPENCODE_API_KEY / OPENCODE_ZEN_API_KEY (or JEV_API_KEY) from dev .env.
 
     Hermes does NOT inject profile secret env into MCP subprocesses (by design), so
-    mcp-jev (which runs as a stdio subprocess of the gateway) reads the profile
-    .env file directly to reuse the SAME opencode-zen credential the dev profile
-    uses. The file is owned by the same user and 0600; no secret is committed to
-    this repo or to config.yaml. Debug log (JEV_DEBUG=1) prints presence/paths only,
-    never key values.
+    mcp-jev (a stdio subprocess of the gateway) reads the profile .env directly to
+    reuse the SAME opencode-zen credential the dev profile uses. The file is
+    user-owned (0600); no secret is committed to this repo or to config.yaml.
+    JEV_DEBUG=1 prints presence/path only, never key values.
     """
     candidates: list[str] = []
     explicit = os.environ.get("JEV_PROFILE_ENV")
@@ -116,11 +94,8 @@ def _load_profile_env_key(profile: str = "dev") -> str | None:
         candidates.append(explicit)
     hermes_home = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
     prof = os.environ.get("HERMES_PROFILE") or os.environ.get("JEV_PROFILE") or profile
-    # 1) HERMES_HOME may already be the profile dir (common under Hermes subprocess)
     candidates.append(os.path.join(hermes_home, ".env"))
-    # 2) HERMES_HOME may be the base .hermes dir
     candidates.append(os.path.join(hermes_home, "profiles", prof, ".env"))
-    # 3) explicit base fallback
     base = os.environ.get("HERMES_HOME_BASE") or os.path.expanduser("~/.hermes")
     if base != hermes_home:
         candidates.append(os.path.join(base, "profiles", prof, ".env"))
@@ -135,215 +110,179 @@ def _load_profile_env_key(profile: str = "dev") -> str | None:
                     if not s or s.startswith("#") or "=" not in s:
                         continue
                     k, _, v = s.partition("=")
-                    if k.strip() in ("OPENCODE_ZEN_API_KEY", "JEV_API_KEY"):
+                    if k.strip() in ("OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY", "JEV_API_KEY"):
                         key = v.strip().strip('"').strip("'")
                         break
         except OSError:
             return None
         if key:
             if os.environ.get("JEV_DEBUG"):
-                red = (key[:4] + "..." + key[-4:]) if key else None
+                red = (key[:4] + "...") if key else None
                 sys.stderr.write(
                     f"[jev-debug] found key in {env_path} "
-                    f"(env_override={'yes' if os.environ.get('OPENCODE_ZEN_API_KEY') else 'no'}) key={red}"
-                    + "\n"
+                    f"(env_override={'yes' if os.environ.get('OPENCODE_API_KEY') else 'no'})"
+                    + (f" key={red}" if red else "") + "\n"
                 )
             return key
     if os.environ.get("JEV_DEBUG"):
-        sys.stderr.write(f"[jev-debug] no .env key found; tried: {candidates}" + "\n")
+        sys.stderr.write(f"[jev-debug] no .env key found; tried: {candidates}\n")
     return None
 
 
-def _resolve_jev_target() -> tuple[str, str, str]:
-    """Return (endpoint, model, api_key).
-
-    opencode-zen free mode is selected when:
-      JEV_PROVIDER == opencode-zen (or 'opencode'), OR JEV_ENDPOINT contains 'opencode.ai/zen'.
-    Key precedence: JEV_API_KEY env -> OPENCODE_ZEN_API_KEY env -> the dev profile's
-    .env (read directly to avoid needing profile-secret env in the MCP subprocess).
-    Nothing is committed.
-    """
-    provider = os.environ.get("JEV_PROVIDER", "").lower()
-    endpoint_env = os.environ.get("JEV_ENDPOINT", "")
-    using_opencode_zen = provider in ("opencode-zen", "opencode", "zen") or (
-        "opencode.ai/zen" in endpoint_env
+def _resolve_jev_target() -> tuple[str, str, str | None]:
+    """Return (endpoint, model, api_key) for the jev System One endpoint."""
+    endpoint = os.environ.get("JEV_ENDPOINT") or _DEFAULT_ENDPOINT
+    model = os.environ.get("JEV_MODEL") or _DEFAULT_JEV_MODEL
+    key = (
+        os.environ.get("JEV_API_KEY")
+        or os.environ.get("OPENCODE_ZEN_API_KEY")
+        or os.environ.get("OPENCODE_API_KEY")
+        or _load_profile_env_key()
     )
-    if not using_opencode_zen and not endpoint_env:
-        # mcp-jev's purpose is the opencode-zen free tier: when no explicit
-        # provider/endpoint is configured, default to opencode-zen so the dev
-        # profile's OPENCODE_ZEN_API_KEY (~/.hermes/profiles/dev/.env) drives the
-        # call without any key in the repo or config.yaml.
-        using_opencode_zen = True
-    if using_opencode_zen:
-        endpoint = endpoint_env or "https://opencode.ai/zen/v1/chat/completions"
-        model = os.environ.get("JEV_MODEL") or "deepseek-v4.1-flash-free"
-        key = (
-            os.environ.get("JEV_API_KEY")
-            or os.environ.get("OPENCODE_ZEN_API_KEY")
-            or _load_profile_env_key()
-        )
-    else:
-        endpoint = endpoint_env or os.environ.get("JEV_ENDPOINT") or ""
-        model = os.environ.get("JEV_MODEL") or ""
-        key = (
-            os.environ.get("JEV_API_KEY")
-            or os.environ.get("OPENCODE_ZEN_API_KEY")
-            or _load_profile_env_key()
-        )
     return endpoint, model, key
 
 
-def _jev_call(prompt: str, max_tokens: int = 512) -> str:
-    """POST a chat-completion to the jev model endpoint. Pure stdlib."""
-    endpoint, model, key = _resolve_jev_target()
-    if not endpoint:
-        raise RuntimeError("no jev endpoint: set JEV_ENDPOINT or JEV_PROVIDER=opencode-zen")
-    if not model:
-        raise RuntimeError("no jev model: set JEV_MODEL (or it defaults to deepseek-v4.1-flash-free)")
-    # Free-tier bypass (ronail/hermes-agent#1 v2, commit c557431): for `*-free`
-    # opencode-zen targets, prefer the real API key as "Bearer {key}" (the relay
-    # accepts it — verified HTTP 200; real keys are NOT flagged as abusive). Fall
-    # back to the anonymous "Bearer public" CLI fingerprint (c557431 / Issue
-    # #49433) only when no key is configured; free opencode-zen then still works
-    # without a key in the subprocess env.
-    is_free = "-free" in model.lower()  # matches hermes _is_opencode_free_tier_model
-    on_opencode_zen = "opencode.ai/zen" in endpoint.lower()
-    if not (is_free and on_opencode_zen) and not key:
-        raise RuntimeError(
-            "no jev model key set: export OPENCODE_ZEN_API_KEY (or JEV_API_KEY) "
-            "in the shell that launches Hermes — never commit it."
-        )
-    body: dict = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
-        "temperature": 0.2,
-    }
-    # Default auth: key if available, else Bearer public (free tier, no key needed).
-    headers = {
-        "Authorization": f"Bearer {key}" if key else "Bearer public",
-        "Content-Type": "application/json",
-    }
-    if is_free and on_opencode_zen:
-        headers.update(_ATTRIBUTION_HEADERS)
-        sess = _gen_opencode_session()
-        # relay requires the same ses_ id across all session headers (Oct 2026)
-        headers["x-opencode-session"] = sess
-        headers["x-opencode-session-id"] = sess
-        headers["x-session-affinity"] = sess
-        headers["x-session-id"] = sess
-        # free opencode-zen: prefer the real API key when present (the relay
-        # accepts it — verified HTTP 200, Oct 2026 — real keys are NOT flagged as
-        # abusive traffic); fall back to the anonymous "Bearer public" CLI
-        # fingerprint (ronail/hermes-agent#1 v2) ONLY when no key is configured,
-        # so the no-key path still reaches the relay without error.
-        headers["Authorization"] = f"Bearer {key}" if key else "Bearer public"
-        body["stream"] = True
-        body["stream_options"] = {"include_usage": True}
-        body["tools"] = _OPCODE_FREE_TOOLS
+def _jev_ask(state: str, question: str, qtype: str = "noul",
+             instructions: str | None = None) -> dict | None:
+    """POST a System One decision query to jev. Returns answers[question].
 
+    Body (per opencode.ai zen docs for jev-1.13-free at /systemone):
+      {"model": <id>, "state": <text>, "questions": {
+          "<question>": {"type": "noul"|"choice"|"score", "instructions": "..."}}}
+    Response:
+      {"model": <id>, "answers": {<question>: {"type":"noul","noul":0.81,...}},
+       "usage": {"input_tokens","output_tokens"}}
+    Auth: Bearer <key> + the desktop UA fingerprint (else 403 1010).
+    """
+    endpoint, model, key = _resolve_jev_target()
+    if not key:
+        raise RuntimeError(
+            "no jev model key set: export OPENCODE_API_KEY (or OPENCODE_ZEN_API_KEY "
+            "/ JEV_API_KEY). jev-1.13-free requires a key (anonymous -> 403)."
+        )
+    q: dict = {"type": qtype}
+    if instructions:
+        q["instructions"] = instructions
+    body = {"model": model, "state": state, "questions": {question: q}}
+    headers = dict(_SYSTEMONE_HEADERS)
+    headers["Authorization"] = f"Bearer {key}"
     req = urllib.request.Request(
-        endpoint,
-        data=json.dumps(body).encode(),
-        method="POST",
-        headers=headers,
+        endpoint, data=json.dumps(body).encode(), method="POST", headers=headers
     )
-    _DBG_REQ = f"[jev-debug] POST {endpoint} model={model} is_free={is_free and on_opencode_zen}"
+    dbg = f"[jev-debug] POST {endpoint} model={model} -> "
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             raw = resp.read()
-            _DBG_REQ += f" -> HTTP {resp.status}"
+            dbg += f"HTTP {resp.status}"
     except urllib.error.HTTPError as e:
         raw = e.read()
-        _DBG_REQ += f" -> HTTP {e.code}"
+        dbg += f"HTTP {e.code}"
         if os.environ.get("JEV_DEBUG"):
-            sys.stderr.write(_DBG_REQ + "\n")
+            sys.stderr.write(dbg + "\n")
             sys.stderr.write(f"[jev-debug] resp-head: {raw[:300]!r}\n")
         raise
-    # 2xx body can be a single JSON object (non-streaming) or an SSE stream of
-    # `data: {...}` lines (the free-tier bypass forces stream:true). Don't JSON-parse
-    # the whole body first (it throws on the SSE stream) — detect, then aggregate.
-    data = None
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        data = None
-    if isinstance(data, dict) and "choices" in data:
-        return data["choices"][0]["message"]["content"]
-    # Streamed: accumulate delta.content across `data:` lines.
-    parts: list[str] = []
-    for line in raw.decode("utf-8", "replace").splitlines():
-        line = line.strip()
-        if not line.startswith("data:"):
-            continue
-        payload = line[5:].strip()
-        if payload == "[DONE]":
-            continue
-        try:
-            chunk = json.loads(payload)
-        except json.JSONDecodeError:
-            continue
-        for ch in chunk.get("choices", []):
-            delta = ch.get("delta", {})
-            c = delta.get("content")
-            if c is not None:
-                parts.append(c)
-    return "".join(parts)
+    if os.environ.get("JEV_DEBUG"):
+        sys.stderr.write(dbg + "\n")
+    data = json.loads(raw.decode("utf-8", "replace"))
+    if not isinstance(data, dict):
+        return None
+    answers = data.get("answers", {}) or {}
+    return answers.get(question)
 
 
-# ── MCP stdio server (minimal JSON-RPC, no dependencies) ───────────────────────
+# ── MCP stdio server (minimal JSON-RPC, no dependencies) ──────────────────────
+
+
 def _send(msg: dict) -> None:
     sys.stdout.write(json.dumps(msg) + "\n")
     sys.stdout.flush()
 
 
-def _tool_summarize(arguments: dict | None) -> str:
-    text = (arguments or {}).get("text", "")
-    budget = int((arguments or {}).get("budget_tokens", 300) or 300)
-    n = len(text)
-    if not text:
-        return "[jev] empty input."
-    prompt = (
-        f"Summarize the following {n}-char tool result into a ~{budget}-token digest. "
-        "Lead with the 1-sentence purpose, then 3-5 bullet key facts (paths, URLs, "
-        "command lines, error signatures verbatim), then the final status. Drop filler.\n\n"
-        f"--- head ---\n{text[:6000]}\n...\n{text[-3000:]}\n--- tail ---"
-    )
+def _tool_health(arguments: dict | None) -> str:
+    """Probe jev reachability. jev is a decision model: a `noul` reachability
+    question that gets a calibrated probability back means the endpoint is alive."""
     try:
-        return "[jev] " + _jev_call(prompt, max_tokens=budget * 4)
+        endpoint, model, _ = _resolve_jev_target()
+        ans = _jev_ask(
+            state="jev model reachability probe",
+            question="is_reachable",
+            qtype="noul",
+            instructions="Does the jev-1.13-free model endpoint respond with a "
+            "calibrated answer to this question?",
+        )
+        if ans is None:
+            return "[jev] error: jev returned no answer (request rejected)."
+        n = ans.get("noul")
+        return (
+            f"[jev] ok: model={model} endpoint={endpoint} -> alive "
+            f"(reachability noul={n})"
+        )
     except RuntimeError as e:
         return f"[jev] {e}"
     except Exception as e:  # noqa: BLE001
         return f"[jev] error: {type(e).__name__}: {e}"
 
 
-def _tool_health(arguments: dict | None) -> str:
+def _tool_summarize(arguments: dict | None) -> str:
+    """Query jev (decision model) for a success/failure probability over `text`.
+
+    jev is a System One decision model: it CANNOT emit a textual digest, so this
+    tool does NOT summarize to `budget_tokens` of prose. It asks jev a `noul`
+    question over the text and returns the calibrated probability (~21 output
+    tokens) — a cheap gating signal for large tool results. `budget_tokens` is
+    accepted for API compatibility but is advisory (jev output cost is fixed).
+    Token saving = a ~21-token oracle call instead of an LLM digest.
+    """
+    text = (arguments or {}).get("text", "")
+    budget = int((arguments or {}).get("budget_tokens", 300) or 300)
+    if not text:
+        return "[jev] empty input."
     try:
-        endpoint, model, key = _resolve_jev_target()
-        if not key:
-            return (
-                "[jev] unconfigured: export OPENCODE_ZEN_API_KEY (or JEV_API_KEY), "
-                "set JEV_PROVIDER=opencode-zen (JEV_MODEL defaults to deepseek-v4.1"
-                "-flash-free). Endpoint default: https://opencode.ai/zen/v1/chat/completions"
-            )
-        out = _jev_call("Reply with the literal token: alive")
-        return f"[jev] ok: provider=opencode-zen model={model} endpoint={endpoint} -> {out.strip()[:60]}"
+        ans = _jev_ask(
+            state=text,
+            question="is_successful",
+            qtype="noul",
+            instructions="Does the above tool result indicate a successful, "
+            "clean outcome?",
+        )
+        if ans is None:
+            return "[jev] error: jev returned no answer (request rejected)."
+        n = ans.get("noul")
+        interp = "likely-success" if (n is None or n >= 0.5) else "likely-failure"
+        return (
+            f"[jev] is_successful noul={n} -> {interp} "
+            f"(jev is a decision model; ~fixed output tokens, not a text digest; "
+            f"budget_tokens={budget} is advisory)"
+        )
+    except RuntimeError as e:
+        return f"[jev] {e}"
     except Exception as e:  # noqa: BLE001
         return f"[jev] error: {type(e).__name__}: {e}"
 
 
 _TOOLS = {
     "jev_health": {
-        "description": "Probe the configured jev model (opencode-zen free tier by default).",
+        "description": (
+            "Probe jev-1.13-free (OpenCode Zen System One decision model) "
+            "reachability via a noul question. Returns 'alive' iff jev answers."
+        ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
     "jev_summarize": {
-        "description": "Compress a large tool result body to a ~budget-token digest via the jev model.",
+        "description": (
+            "Query jev-1.13-free for a calibrated success/failure probability "
+            "(~21 output tokens) over the given text `state`. jev is a DECISION "
+            "model and cannot emit a text digest; this is a cheap gating signal, "
+            "not a summary. `budget_tokens` is advisory (API-compat only)."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "text": {"type": "string", "description": "Text to compress (may be large)."},
-                "budget_tokens": {"type": "integer", "default": 300, "minimum": 10, "maximum": 1000},
+                "text": {"type": "string",
+                         "description": "Text to query jev about (the decision state)."},
+                "budget_tokens": {"type": "integer", "default": 300,
+                                  "minimum": 10, "maximum": 1000,
+                                  "description": "Advisory output budget (jev cost is fixed & tiny)."},
             },
             "required": ["text"],
         },
@@ -382,12 +321,11 @@ def main() -> None:
 
         if method == "initialize":
             _send({
-                "jsonrpc": "2.0",
-                "id": mid,
+                "jsonrpc": "2.0", "id": mid,
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "jev", "version": "1.0.0"},
+                    "serverInfo": {"name": "jev", "version": "1.1.0"},
                 },
             })
         elif method == "initialized":
@@ -402,7 +340,8 @@ def main() -> None:
         else:
             if mid is not None:
                 _send({"jsonrpc": "2.0", "id": mid,
-                       "error": {"code": -32601, "message": f"method not found: {method}"}})
+                       "error": {"code": -32601,
+                                 "message": f"method not found: {method}"}})
 
 
 if __name__ == "__main__":
