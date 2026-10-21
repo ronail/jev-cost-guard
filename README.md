@@ -102,28 +102,34 @@ hermes -p dev mcp add jev \
 hermes -p dev mcp list      # -> jev ... 2 tools  enabled
 ```
 
-### jev-1.13-free status (verified live)
+### jev-1.13-free auth (real key OR no key)
 
-`jev-1.13-free` is reached at `https://opencode.ai/zen/v1/systemone` with a **real
-API key** (`Authorization: Bearer <OPENCODE_ZEN_API_KEY>` from
-`profiles/dev/.env`) and the desktop client fingerprint —
+jev-1.13-free is reached at `https://opencode.ai/zen/v1/systemone`. Auth has two
+supported modes — both verified live (HTTP 200):
+
+1. **Real key (preferred):** `Authorization: Bearer <OPENCODE_ZEN_API_KEY>` from
+   `profiles/dev/.env`.
+2. **No key (free tier):** when no key is configured, mcp-jev sends
+   `Authorization: Bearer public` — the relay's free-tier public bearer
+   (PR `ronail/hermes-agent#1`) — plus the desktop client fingerprint.
+
+In both modes the OpenCode desktop fingerprint is sent —
 `User-Agent: opencode/1.18.31` + `x-opencode-client: desktop` +
 `x-opencode-project: global`. The request body is System One shaped, e.g.
 `{"model":"jev-1.13-free","state":"<text>","questions":{"is_successful":{"type":"noul"}}}`,
 and the response is probabilities + tiny `usage` (~21 output tokens), **not** an
 OpenAI-style `choices`/`delta` stream.
 
-Auth failure modes (all verified):
-
 | attempt | result |
 |---|---|
-| anonymous / no key | `403 FreeTierError: "...can only be used from within OpenCode"` |
+| no key configured (mcp-jev sends `Bearer public`) | **HTTP 200** (jev free tier) |
+| truly anonymous — no `Authorization` at all | `403 FreeTierError: "...can only be used from within OpenCode"` |
 | real key, no desktop UA | `403 error code: 1010` |
 | wrong path `/inference/systemone/v1/systemone` | `403 error code: 1010` |
 | OpenAI `/chat/completions` shape | `400 ModelProtocolUnsupported` |
-| **real key + desktop UA + `/zen/v1/systemone`** | **HTTP 200** |
+| real key + desktop UA + `/zen/v1/systemone` | **HTTP 200** |
 
 mcp-jev reads the dev profile's `OPENCODE_ZEN_API_KEY` from `profiles/dev/.env`
 at runtime (Hermes does not inject profile secrets into MCP subprocesses). The
-key is never committed. No browser / OAuth / device-flow is involved — API-key
-auth only.
+key is never committed. No browser / OAuth / device-flow is involved — a real API
+key is preferred, with the free-tier `Bearer public` bearer as the no-key path.

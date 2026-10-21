@@ -18,8 +18,12 @@ What `jev-1.13-free` IS (verified against the relay, Oct 2026):
       score   -> `score`  (rubric scores)
 - Endpoint: https://opencode.ai/zen/v1/systemone
   (NOT /chat/completions and NOT /inference/systemone — that path 403/1010s).
-- Auth: `Authorization: Bearer <OPENCODE_API_KEY>`. A real key is REQUIRED:
-  anonymous / no-key -> 403 FreeTierError ("...can only be used within OpenCode").
+- Auth: a real `OPENCODE_ZEN_API_KEY` is preferred (`Authorization: Bearer <key>`).
+  When NO key is configured, mcp-jev uses the relay free-tier public bearer
+  (`Authorization: Bearer public`, per PR ronail/hermes-agent#1) for `*-free`
+  models — verified live: jev-1.13-free at /systemone -> HTTP 200. Truly
+  anonymous (no `Authorization` header at all) -> 403 FreeTierError. Non-free
+  models require a real key.
 - Relay fingerprint: without the OpenCode desktop UA the relay returns HTTP
   403 error code 1010. Required headers:
       User-Agent: opencode/1.18.31
@@ -155,21 +159,31 @@ def _jev_ask(state: str, question: str, qtype: str = "noul",
     Auth: Bearer <key> + the desktop UA fingerprint (else 403 1010).
     """
     endpoint, model, key = _resolve_jev_target()
-    if not key:
-        raise RuntimeError(
-            "no jev model key set: export OPENCODE_API_KEY (or OPENCODE_ZEN_API_KEY "
-            "/ JEV_API_KEY). jev-1.13-free requires a key (anonymous -> 403)."
-        )
+    # jev-1.13-free is NOT reachable anonymously (the relay returns 403
+    # FreeTierError), but when no key is configured we still attempt the call
+    # WITHOUT a bearer token so the relay's real auth verdict is surfaced as a
+    # clean `[jev]` message instead of short-circuiting with "no key set".
     q: dict = {"type": qtype}
     if instructions:
         q["instructions"] = instructions
     body = {"model": model, "state": state, "questions": {question: q}}
     headers = dict(_SYSTEMONE_HEADERS)
-    headers["Authorization"] = f"Bearer {key}"
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    elif model.endswith("-free"):
+        # No key configured: relay free-tier public bearer (PR ronail/hermes-agent#1).
+        # Verified live: jev-1.13-free at /systemone -> HTTP 200 with Bearer public.
+        headers["Authorization"] = "Bearer public"
+    else:
+        raise RuntimeError(
+            f"no API key set for non-free model {model!r}; set "
+            "OPENCODE_ZEN_API_KEY (or OPENCODE_API_KEY / JEV_API_KEY). "
+            "Only *-free models can run keyless via the relay's public bearer."
+        )
     req = urllib.request.Request(
         endpoint, data=json.dumps(body).encode(), method="POST", headers=headers
     )
-    dbg = f"[jev-debug] POST {endpoint} model={model} -> "
+    dbg = f"[jev-debug] POST {endpoint} model={model} auth={'key' if key else 'public-bearer'} -> "
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             raw = resp.read()
@@ -180,7 +194,12 @@ def _jev_ask(state: str, question: str, qtype: str = "noul",
         if os.environ.get("JEV_DEBUG"):
             sys.stderr.write(dbg + "\n")
             sys.stderr.write(f"[jev-debug] resp-head: {raw[:300]!r}\n")
-        raise
+        resp_body = raw.decode("utf-8", "replace")[:300]
+        auth = "key" if key else "public-bearer"
+        raise RuntimeError(
+            f"jev request failed: HTTP {e.code} (auth={auth}). "
+            f"relay response: {resp_body}"
+        ) from e
     if os.environ.get("JEV_DEBUG"):
         sys.stderr.write(dbg + "\n")
     data = json.loads(raw.decode("utf-8", "replace"))
