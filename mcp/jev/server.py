@@ -19,7 +19,9 @@ Semantics (see docs/token-savings.md "what opencode means here"):
 # - UA opencode/latest/2.0.29/cli, x-opencode-client=cli, x-opencode-project=global
 # - x-opencode-session = x-opencode-session-id = x-session-affinity = x-session-id =
 #   ses_<12hex><14base62> (idgen.go, counter=1)
-# - Authorization: Bearer public (real API keys are flagged as abusive traffic)
+# - Authorization: Bearer {key} when a key is present (real keys are accepted by the
+#   relay — verified HTTP 200 — and are NOT flagged; fall back to the anonymous
+#   "Bearer public" CLI fingerprint only when no key is set)
 # - body stream:true + stream_options.include_usage + shell/glob/grep/read tool stubs
 # No X-Stainless headers: urllib never adds them.
 
@@ -166,6 +168,12 @@ def _resolve_jev_target() -> tuple[str, str, str]:
     using_opencode_zen = provider in ("opencode-zen", "opencode", "zen") or (
         "opencode.ai/zen" in endpoint_env
     )
+    if not using_opencode_zen and not endpoint_env:
+        # mcp-jev's purpose is the opencode-zen free tier: when no explicit
+        # provider/endpoint is configured, default to opencode-zen so the dev
+        # profile's OPENCODE_ZEN_API_KEY (~/.hermes/profiles/dev/.env) drives the
+        # call without any key in the repo or config.yaml.
+        using_opencode_zen = True
     if using_opencode_zen:
         endpoint = endpoint_env or "https://opencode.ai/zen/v1/chat/completions"
         model = os.environ.get("JEV_MODEL") or "deepseek-v4.1-flash-free"
@@ -193,10 +201,11 @@ def _jev_call(prompt: str, max_tokens: int = 512) -> str:
     if not model:
         raise RuntimeError("no jev model: set JEV_MODEL (or it defaults to deepseek-v4.1-flash-free)")
     # Free-tier bypass (ronail/hermes-agent#1 v2, commit c557431): for `*-free`
-    # opencode-zen targets the relay overrides Authorization to "Bearer public"
-    # (Issue #49433 — real API keys are flagged as abusive traffic). So the key is
-    # only required for paid / non-opencode-zen targets; free opencode-zen works
-    # without any key in the subprocess env.
+    # opencode-zen targets, prefer the real API key as "Bearer {key}" (the relay
+    # accepts it — verified HTTP 200; real keys are NOT flagged as abusive). Fall
+    # back to the anonymous "Bearer public" CLI fingerprint (c557431 / Issue
+    # #49433) only when no key is configured; free opencode-zen then still works
+    # without a key in the subprocess env.
     is_free = "-free" in model.lower()  # matches hermes _is_opencode_free_tier_model
     on_opencode_zen = "opencode.ai/zen" in endpoint.lower()
     if not (is_free and on_opencode_zen) and not key:
@@ -223,8 +232,12 @@ def _jev_call(prompt: str, max_tokens: int = 512) -> str:
         headers["x-opencode-session-id"] = sess
         headers["x-session-affinity"] = sess
         headers["x-session-id"] = sess
-        # free opencode-zen tier authenticates as the CLI fingerprint, NOT a key
-        headers["Authorization"] = "Bearer public"
+        # free opencode-zen: prefer the real API key when present (the relay
+        # accepts it — verified HTTP 200, Oct 2026 — real keys are NOT flagged as
+        # abusive traffic); fall back to the anonymous "Bearer public" CLI
+        # fingerprint (ronail/hermes-agent#1 v2) ONLY when no key is configured,
+        # so the no-key path still reaches the relay without error.
+        headers["Authorization"] = f"Bearer {key}" if key else "Bearer public"
         body["stream"] = True
         body["stream_options"] = {"include_usage": True}
         body["tools"] = _OPCODE_FREE_TOOLS
