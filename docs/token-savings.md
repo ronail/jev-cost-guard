@@ -2,39 +2,33 @@
 
 Measured on the `dev` profile (`poolside/laguna-s-2.1:free` via provider `nous`,
 no provider prompt-caching → full cost on every call). Two levers: a fixed-prompt
-shrink via config, and a variable runtime cap via the plugin.
+shrink via config, and a variable runtime cap via the `jev` model (`mcp/jev`, opt-in).
 
 ## Status on `dev` (current)
 - 6 `jev-*` skills installed in `~/.hermes/profiles/dev/skills/jev/` (index only,
   on-demand — `skills.auto_load` left at its default `[]`).
-- `jev-context-guard` plugin **enabled**; runs in the gateway
-  ("`gateway_transforms` active"). Hooks fire for `transform_tool_result` +
-  `transform_terminal_output`.
+- `mcp/jev` MCP server registered in `dev` (`mcp_servers.jev`, `jev_health` +
+  `jev_summarize`, provider `opencode-zen`, model `deepseek-v4.1-flash-free`).
 - `config.yaml` otherwise **pristine** (the earlier `agent.disabled_toolsets`
   experiment was reverted on request). No toolset trimming is active right now.
 
-> Note on "the jev model": **no such model exists** in any profile config
-> (`deepseek`, `openrouter`, `anthropic`, `openai`, `nous`, `opencode` only).
-> The plugin's cap is pure Python string slicing — strictly cheaper than any
-> model-based summarization, which would *add* an LLM call. Savings are achieved
-> by the plugin + skills running in the dev session under its existing model.
+> Note on "the jev model": `jev` is a namespace prefix for this project's
+> artifacts, not a model name. The jev model path is the opencode-zen provider
+> (`deepseek-v4.1-flash-free`) reached via mcp-jev using the relay free-tier bypass
+> (PR `ronail/hermes-agent#1`). Savings come from the model path (opt-in) + the
+> skills running in the dev session under its existing
+> model (`poolside/laguna-s-2.1:free`, provider `nous`).
 
-## Runtime savings (LIVE, in-session, model-quoted)
+## Runtime savings (model path, opt-in)
 
-Triggered by real tool calls; full bodies spilled to `$BH_AGENT_WORKSPACE/cache/jev-context-guard/`:
-
-| tool | input size | model received | saved | / ~3.9 tok | spill file |
-|---|---|---|---|---|---|
-| `web_extract` (docs page, char_limit 20000) | 21,305 B | ~6,240 B (head+tail) | ~15,085 B | **~3,862 tok** | 21,305 B |
-| `terminal` (`z`*15000 + newline) | 15,001 B | ~6,240 B (single cap) | ~8,781 B | **~2,252 tok** | 15,001 B |
-
-The model quoted the `[jev-context-guard]` marker verbatim in its reply, and the
-spill files on disk match the input sizes exactly. The double-cap that briefly
-occurred on terminal was fixed via the `if "[jev-context-guard]" in text[:500]`
-guard in the hook.
-
-Per-result saving scales with output size: anything >6 KB is capped to ~6.2 KB,
-so an N KB result costs the agent ~3,900 tokens of transcript regardless of N.
+mcp-jev (`JEV_MCP=1`) compresses oversized results to a ~300-token digest via
+`jev_summarize` rather than pasting raw output. Each compression costs one
+model round-trip (~15 KB in + ~300 tok out ≈ ~4,000 tokens), so it pays off
+when the result is ≥4 KB — typical for `web_extract`/`terminal`/`read_file`.
+The full body is still reachable from the caller; only the digest enters the
+transcript. A live `jev_health` probe hit the opencode-zen free tier and
+returned `alive` (HTTP 200 + SSE aggregated); see the free-tier status note
+below.
 
 ## Fixed-prompt savings (available, gated by config — NOT currently applied on dev)
 
@@ -86,8 +80,8 @@ sessions make more calls).
 
 ## When this differs
 - **Anthropic (cached) profiles** (`default`): prompt caching makes the stable
-  prefix ~0.1× on repeated calls, so relative saving is smaller; the runtime
-  plugin cap still applies verbatim.
+  prefix ~0.1× on repeated calls, so relative saving is smaller; the fixed-prompt
+  audit (skills) still applies verbatim.
 - **`kanban` (26 KB ≈ 6.8k tok/call)** is absent from `dev`; it is the biggest
   lever on `devops`/`planner`/`reviewer` (see README matrix) but is opt-in there.
 - `skills.auto_load` full-body is cheap *only* on caching providers; on
