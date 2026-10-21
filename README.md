@@ -155,4 +155,40 @@ faster it pays off. No other model is involved.
 | `hermes/` | the `jev-*` Hermes skills |
 | `SKILLS.md` | index + per-profile wiring |
 | `docs/token-savings.md` | token-accounting + cap-removal history |
-| `LICENSE` | MIT |
+|| `LICENSE` | MIT |
+|| `plugin.yaml` | jev-cost-guard plugin manifest (repo-root) |
+|| `__init__.py` | jev-cost-guard plugin: register(ctx) + transform_tool_result hook |
+
+## jev-cost-guard plugin
+
+An **opt-in** hook plugin (named to match the repo) that auto-gates oversized tool
+results through `jev-1.13-free`, replacing the result in-transcript with a ~7-token
+`noul` verdict so the body is not re-sent on later turns.
+
+Install (inactive — the hook does **not** fire until you enable it):
+
+    hermes -p dev plugins install ronail/jev-cost-guard --no-deps
+
+Enable (activates the hook — oversized results are REPLACED by the verdict, so the
+original output is dropped from context):
+
+    hermes -p dev plugins enable jev-cost-guard
+
+Tunables (env or `profiles/dev/.env`):
+
+| var | default | meaning |
+|---|---|---|
+| `JEV_THRESHOLD` | `1000` | gate results > N tokens (~4N chars) |
+| `JEV_GATE_TOOLS` | *(empty)* | comma-list to gate only these tools |
+| `JEV_SKIP_TOOLS` | `read_file,write_file,patch,edit_file,skill_manage` | never gate these |
+| `JEV_DEBUG` | `0` | `1` logs per-call diagnostics |
+| `JEV_MODEL` / `JEV_ENDPOINT` | `jev-1.13-free` / `https://opencode.ai/zen/v1/systemone` | the jev target |
+
+Auth reuses the dev credential the `jev` MCP uses (`OPENCODE_ZEN_API_KEY` from
+`profiles/dev/.env`); `Bearer public` is used for the no-key free tier. **Fail-open**
+on any jev error (the original result is kept). The hook skips `jev_health` /
+`jev_summarize` and any already-judged `[jev]` verdict (re-entry guard).
+
+> ⚠️ Enabling is systemic: a gated result loses its body. Start with a high
+> `JEV_THRESHOLD` and a narrow `JEV_GATE_TOOLS` (e.g. `bash`) to tune before
+> broadening.
