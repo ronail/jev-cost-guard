@@ -5,3 +5,5 @@ Default spill target for the `jev-context-guard` plugin and the
 Resolved at runtime from `$BH_AGENT_WORKSPACE`.
 /.jev-context-guard/
 **/__pycache__/
+__pycache__/
+*.pyc

@@ -1,13 +1,13 @@
-[
-  {
-    "mcpServers": {
-      "jev": {
-        "command": "python3",
-        "args": ["/Users/ronail/Projects/jev-cost-guard/mcp/jev/server.py"],
-        "env": {
-          "JEV_MODEL": "deepseek-v4.1-flash-free"
-        }
+{
+  "mcpServers": {
+    "jev": {
+      "command": "python3",
+      "args": ["/Users/ronail/Projects/jev-cost-guard/mcp/jev/server.py"],
+      "env": {
+        "JEV_MODEL": "jev-1.13-free",
+        "JEV_ENDPOINT": "https://opencode.ai/zen/v1/systemone",
+        "JEV_MCP": "1"
       }
     }
   }
-]
+}
