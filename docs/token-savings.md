@@ -27,8 +27,8 @@ re-pasting raw tool output. A `jev_summarize` call asks jev-1.13-free a binary
 hundred tokens (typical for `web_extract` / `terminal` / `read_file`). The full
 body is still reachable by the caller from the original tool; only the jev
 probability signal enters the transcript. A live `jev_health` probe hit jev-1.13-
-free at `/zen/v1/systemone` and returned a reachability `noul` (HTTP 200); see
-the jev-1.13-free status note below.
+free at `/systemone` and returned a reachability `noul` (HTTP 200); see the
+jev-1.13-free auth note below.
 
 ## Fixed-prompt savings (available, gated by config — NOT currently applied on dev)
 
@@ -54,18 +54,18 @@ sessions make more calls).
   probability (~291 in + ~21 out tokens measured); it is on by default — set
   `JEV_MCP=0` to disable.
 - jev-1.13-free is an opencode-zen **System One decision model** reached *only* at
-  `https://opencode.ai/zen/v1/systemone` with a real API key (`Authorization:
-  Bearer <OPENCODE_ZEN_API_KEY>` from `profiles/dev/.env`) + the desktop client
-  fingerprint (`User-Agent: opencode/1.18.31`, `x-opencode-client: desktop`,
-  `x-opencode-project: global`). No bearer-public / no anonymous — a real key +
-  desktop UA are required (anonymous → `403 FreeTierError`; bare key w/o desktop
-  UA → `403 error code: 1010`; wrong path → 403 1010).
-- The request body is System One shaped (`{"model":"jev-1.13-free","state":"…",
-  "questions":{…}}` with `noul`/`choice`/`score` question types); the response is
-  probabilities + `usage` (~21 output tokens), **not** an OpenAI `choices`/`delta`
-  stream. `JEV_MODEL` is fixed to `jev-1.13-free` — there is **no fallback** to any
-  other model.
-- mcp-jev makes **no automatic retries** (a 403 is surfaced verbatim to the
+  `https://opencode.ai/zen/v1/systemone`. A real `OPENCODE_ZEN_API_KEY`
+  (`Authorization: Bearer <key>` from `profiles/dev/.env`) is preferred; when none
+  is set, mcp-jev falls back to the relay free-tier **public bearer**
+  (`Authorization: Bearer public`, PR `ronail/hermes-agent#1`) — verified live
+  (HTTP 200) — so the no-key case is genuinely supported, not an error. The OpenCode
+  desktop fingerprint is sent in both modes
+  (`User-Agent: opencode/1.18.31`, `x-opencode-client: desktop`,
+  `x-opencode-project: global`). `JEV_MODEL` is fixed to `jev-1.13-free` — there
+  is **no fallback** to any other model.
+- Truly anonymous (no `Authorization` header at all) -> `403 FreeTierError`; a
+  real key w/o the desktop UA -> `403 error code 1010`; wrong path -> 403 1010.
+  mcp-jev makes **no automatic retries** (a 403 is surfaced verbatim to the
   caller), so relay load is exactly one call per trim.
 - The dev profile's `OPENCODE_ZEN_API_KEY` is read from `profiles/dev/.env` at
   runtime (Hermes does not inject profile secrets into MCP subprocesses — the
