@@ -16,14 +16,7 @@ The cost figures are from `hermes prompt-size --json` on the 8 stock profiles
 | `jev-test-output-triage` | ~50 | dev, devops, tester, reviewer | test/log bloat |
 | `jev-source-digest` | ~50 | researcher, product, planner, reviewer | web/page bloat |
 
-## Plugin (Hermes only)
 
-`plugins/jev-context-guard/` — registers `transform_terminal_output` then
-`transform_tool_result` (verified hook signatures live at
-`https://hermes-agent.nousresearch.com/docs/user-guide/features/hooks`).
-Caps any single tool result > 12 KB (default) to `head 6k + tail 2k + [full: path]`
-and writes the complete body to
-`$BH_AGENT_WORKSPACE/cache/jev-context-guard/<tool>/<id>.full`. Zero prompt cost.
 
 ## Wiring per profile (config.yaml)
 
@@ -58,8 +51,6 @@ Remove whichever half that profile doesn't exercise.
 
 - **Claude Code**: `claude-code/index.json` lists each skill's trigger + body.
 - **Cursor**: `cursor/*` are `.mdc` rule files mapping trigger → skill body.
-- `assets/result_truncate.py` is shared by both the Hermes plugin and any harness
-  that wants the same head/tail spill logic.
 
 ## Verify
 ```bash

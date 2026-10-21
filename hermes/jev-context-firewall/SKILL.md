@@ -38,5 +38,6 @@ digest = summarize_in_code(body)        # e.g. parse, filter, count
 return f"{len(body)} chars\n{digest}"
 ```
 
-The `jev-context-guard` plugin enforces the spill at the hook boundary; this
-skill enforces the decision.
+This skill enforces the spill-at-the-boundary decision: bulk work is delegated or
+reduced to a digest before it touches the main transcript, rather than relying on a
+post-hoc cap.

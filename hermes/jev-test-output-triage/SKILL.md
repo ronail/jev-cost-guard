@@ -31,8 +31,9 @@ of text that collapses to a single failing-assertion list.
   error token first), or `grep -A60 "<fail>" build.log | tail -n 60`.
 - **Cap the tail.** If you must show a passing command's output, pipe through
   `tail -n 25`.
-- **Spill and link.** `jev-context-guard` would cap this at 12 KB anyway; this
-  skill makes sure it never gets that far — the failure set is usually <200 B.
+- **Spill and link.** Prefer writing full output to `$BH_AGENT_WORKSPACE/cache/`
+  and returning only a digest; the failure set is usually <200 B, so it rarely
+  grows large enough to need truncation.
 
 ## Failure case
 If a single `terminal` call's result exceeds 4 KB, the skill failed that turn.

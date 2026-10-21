@@ -24,8 +24,7 @@ the gate; this skill trims what you append *each turn*.
   do not read it back to confirm — trust the result object.
 - **Cap tool output in code.** Pipe logs/large blobs through `execute_code` and
   print only the aggregate (e.g. `len(...)`, failing lines, a top-N). Never paste
-  >12 KB of tool output raw into context. (The `jev-context-guard` plugin enforces
-  this at the hook level too.)
+  >12 KB of tool output raw into context.
 - **One task per session.** When context pressure rises (/usage > 1.2k tokens)
   prefer `/new` with a path reference to the old session over /compress, because
   summary calls also cost tokens.
