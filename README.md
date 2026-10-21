@@ -17,10 +17,16 @@ It attacks the two real token leak classes visible in `hermes prompt-size`:
 
 ### Install the skills
 ```bash
-hermes skills install ronail/jev-cost-guard
+# register the repo as a skill source (discovers every jev-* skill)
+hermes skills tap add ronail/jev-cost-guard
+# install + scan a single skill (fetches sibling references/ too)
+hermes skills install ronail/jev-cost-guard/hermes/jev-context-economy --yes
 ```
-Then add the shared `auto_load` list to each profile's `config.yaml` (see `SKILLS.md`
-for the per-profile wiring and the profile→skill matrix).
+`hermes skills tap add` was verified to register the source and list the `jev-*`
+skills; `hermes skills install <owner/repo/path> --yes` then downloads, runs the
+skills-guard scan, and installs the skill. Add the desired skills to each profile's
+`skills.auto_load` in `config.yaml` (see `SKILLS.md` for the shared + per-profile
+lists).
 
 | skill | purpose |
 |---|---|
@@ -43,7 +49,7 @@ hermes -p dev mcp add jev \
   --command python3 \
   --env JEV_MODEL=jev-1.13-free \
   --env JEV_ENDPOINT=https://opencode.ai/zen/v1/systemone \
-  --args /Users/ronail/Projects/jev-cost-guard/mcp/jev/server.py
+  --args <repo>/mcp/jev/server.py   # absolute path to your checkout of ronail/jev-cost-guard
 hermes -p dev mcp list        # -> jev ... 2 tools  enabled
 ```
 
