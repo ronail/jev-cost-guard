@@ -129,6 +129,7 @@ the whole body every later call; jev's full billed output is the ~24 in the tabl
 
 | body (chars) | ~body tokens | verdict kept | noul |
 |---|---|---|---|
+| 4,000 | ~1,000 | **~7 tokens** | 0.88 |
 | 8,000 | ~2,000 | **~7 tokens** | 0.77 |
 | 20,000 | ~5,000 | **~7 tokens** | 0.88 |
 
