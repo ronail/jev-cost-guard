@@ -60,8 +60,10 @@ failure modes) are documented in `mcp/jev/env.example` and the server docstring.
 
 | env | default | note |
 |---|---|---|
-| `JEV_MODEL` | `jev-1.13-free` | optional — the only model in scope (no fallback) |
+| `JEV_MODEL` | `jev-1.13-free` | optional — default model in scope |
 | `JEV_ENDPOINT` | `https://opencode.ai/zen/v1/systemone` | optional — System One endpoint |
+| `JEV_FALLBACK_TO_PAID` | `1` | `1` (default) on `jev-1.13-free` exhaustion (HTTP 429/403 with a real key) retry the paid model; `0` fails open; no-key never falls back |
+| `JEV_FALLBACK_MODEL` | `jev-1.13` | paid model retried on free exhaustion (same key/endpoint/UA; bills your opencode account) |
 | `JEV_DEBUG` | `0` | optional — `1` = print masked key prefix/suffix |
 | `OPENCODE_ZEN_API_KEY` | (from `profiles/<profile>/.env`) | required for the real-key path |
 
@@ -189,6 +191,8 @@ Tunables (env or `profiles/dev/.env`):
 | `JEV_SKIP_TOOLS` | `read_file,write_file,patch,edit_file,skill_manage` | never gate these |
 | `JEV_DEBUG` | `0` | `1` logs per-call diagnostics |
 | `JEV_MODEL` / `JEV_ENDPOINT` | `jev-1.13-free` / `https://opencode.ai/zen/v1/systemone` | the jev target |
+| `JEV_FALLBACK_TO_PAID` | `1` | on `jev-1.13-free` exhaustion (HTTP 429/403) with a real key, retry paid `jev-1.13` (same key/endpoint/UA; bills your opencode account); `0` fails open; no-key never falls back |
+| `JEV_FALLBACK_MODEL` | `jev-1.13` | paid model retried on free exhaustion |
 
 Auth reuses the dev credential the `jev` MCP uses (`OPENCODE_ZEN_API_KEY` from
 `profiles/dev/.env`); `Bearer public` is used for the no-key free tier. **Fail-open**
