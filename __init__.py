@@ -22,7 +22,9 @@ configured (read from ~/.hermes/profiles/dev/.env, the same credential the
 opencode-zen provider uses), else `Bearer public` for the free model
 (jev-1.13-free). Endpoint: https://opencode.ai/zen/v1/systemone (NOT the chat
 path; jev is a System One decision model emitting noul/choice/score, ~21 output
-tokens).
+tokens). On free-tier exhaustion (HTTP 429/403) with a real key, `_jev_ask`
+retries paid jev-1.13 (JEV_FALLBACK_TO_PAID=1, JEV_FALLBACK_MODEL=jev-1.13);
+0 fails open. No-key calls never fall back (no key => no paid route).
 """
 from __future__ import annotations
 
@@ -117,11 +119,32 @@ def _jev_ask(state: str, question: str, qtype: str = "noul",
              instructions: str | None = None) -> dict | None:
     """POST a System One decision query to jev. Returns answers[question].
 
+    Defaults to `jev-1.13-free` (Bearer <key> when a key is configured, else the
+    relay free-tier `Bearer public`). On free-tier exhaustion (HTTP 429/403 —
+    quota or IP rate-limit) with a real key present and `JEV_FALLBACK_TO_PAID`
+    != "0", retries the SAME key + endpoint + desktop UA with the paid model
+    `JEV_FALLBACK_MODEL` (default `jev-1.13`). Paid jev bills the opencode
+    account; `JEV_FALLBACK_TO_PAID=0` fails open instead. No-key calls never
+    fall back (no key => no paid route).
+
     Body: {"model": <id>, "state": <text>, "questions": {"<q>": {"type": "...",
     "instructions": "..."}}}
     Auth: Bearer <key> (or `Bearer public` for *-free when no key); desktop UA.
     """
-    endpoint, model, key = _resolve_jev_target()
+    return _jev_post(state, question, qtype, instructions, _retry_paid=True)
+
+
+def _jev_post(state: str, question: str, qtype: str = "noul",
+             instructions: str | None = None, *,
+             model: str | None = None, _retry_paid: bool = False) -> dict | None:
+    """Single (non-recursive) System One POST for `model` (or resolved default).
+
+    `_jev_ask` retries here with the paid model on free-tier exhaustion;
+    `_retry_paid=False` on the retry bounds recursion (a paid model is never
+    retried — paid exhaustion raises so the caller fails open).
+    """
+    endpoint, default_model, key = _resolve_jev_target()
+    model = model or default_model
     q: dict = {"type": qtype}
     if instructions:
         q["instructions"] = instructions
@@ -155,6 +178,24 @@ def _jev_ask(state: str, question: str, qtype: str = "noul",
             sys.stderr.write(f"[jev-cost-guard] resp-head: {raw[:300]!r}\n")
         resp_body = raw.decode("utf-8", "replace")[:300]
         auth = "key" if key else "public-bearer"
+        # free-tier exhaustion: fall back to paid jev only when a real key is
+        # present (no key => Bearer public => no paid route) and the caller
+        # opted in. Paid jev bills the opencode account.
+        if (
+            _retry_paid
+            and os.environ.get("JEV_FALLBACK_TO_PAID", "1") != "0"
+            and key
+            and default_model.endswith("-free")
+            and e.code in (429, 403)
+        ):
+            paid = os.environ.get("JEV_FALLBACK_MODEL", "jev-1.13")
+            if os.environ.get("JEV_DEBUG"):
+                sys.stderr.write(
+                    f"[jev-cost-guard] free-tier exhausted (HTTP {e.code}); "
+                    f"retrying paid model {paid} (auth=key)\n"
+                )
+            return _jev_post(state, question, qtype, instructions,
+                             model=paid, _retry_paid=False)
         raise RuntimeError(
             f"jev request failed: HTTP {e.code} (auth={auth}). "
             f"relay response: {resp_body}"
