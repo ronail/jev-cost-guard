@@ -18,6 +18,8 @@ shrink via config, and a variable runtime trim via the `jev` model (`mcp/jev`).
 > text-generation model; one call costs ~291 in + ~21 out tokens (measured) and
 > returns a probability signal (`noul` / `choice` / `score`). There is no
 > `deepseek-v4.1-flash-free` in this MCP — `jev-1.13-free` is the only model.
+> (On `jev-1.13-free` exhaustion with a real key, retries paid `jev-1.13` — same
+> jev family, not a different model; `JEV_FALLBACK_TO_PAID=0` disables.)
 
 ## Runtime savings (model path)
 mcp-jev (`JEV_MCP=1`, default on) trims oversized results instead of the agent
@@ -61,12 +63,14 @@ sessions make more calls).
   (HTTP 200) — so the no-key case is genuinely supported, not an error. The OpenCode
   desktop fingerprint is sent in both modes
   (`User-Agent: opencode/1.18.31`, `x-opencode-client: desktop`,
-  `x-opencode-project: global`). `JEV_MODEL` is fixed to `jev-1.13-free` — there
-  is **no fallback** to any other model.
+  `x-opencode-project: global`). `JEV_MODEL` is fixed to `jev-1.13-free` — on free
+  exhaustion (HTTP 429/403) with a real key, retries paid `jev-1.13` once (same
+  key/endpoint/UA; `JEV_FALLBACK_TO_PAID` default 1, `=0` fails open; no-key
+  `Bearer public` never falls back).
 - Truly anonymous (no `Authorization` header at all) -> `403 FreeTierError`; a
-  real key w/o the desktop UA -> `403 error code 1010`; wrong path -> 403 1010.
-  mcp-jev makes **no automatic retries** (a 403 is surfaced verbatim to the
-  caller), so relay load is exactly one call per trim.
+  real key w/o the desktop UA -> `403 error code: 1010`; wrong path -> 403 1010.
+  Paid retry is bounded (`_retry_paid=False`); a second failure raises so the
+  caller fails open. Relay load is one call per trim, at most one paid retry.
 - The dev profile's `OPENCODE_ZEN_API_KEY` is read from `profiles/dev/.env` at
   runtime (Hermes does not inject profile secrets into MCP subprocesses — the
   loader tries `HERMES_HOME/.env`, `HERMES_HOME/profiles/<p>/.env`, and

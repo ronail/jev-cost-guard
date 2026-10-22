@@ -105,8 +105,8 @@ sizes; the bigger the body, the faster it pays off.
 
 Measured through the **dev profile** — real `OPENCODE_ZEN_API_KEY` (from
 `profiles/dev/.env`), `Authorization: Bearer <key>`, desktop `User-Agent`, at
-`https://opencode.ai/zen/v1/systemone`, model `jev-1.13-free` (jev is the only model in
-scope — no fallback). Each row is one `jev_summarize` call: a `noul` "is the above
+`https://opencode.ai/zen/v1/systemone`, model `jev-1.13-free` (primary; paid `jev-1.13`
+is a fallback on free exhaustion — see `JEV_FALLBACK_TO_PAID`). Each row is one `jev_summarize` call: a `noul` "is the above
 tool-result successful?" question over a synthetic tool-output body of the stated size.
 The relay returns its own `usage`, so the full cost of one judgment is visible.
 

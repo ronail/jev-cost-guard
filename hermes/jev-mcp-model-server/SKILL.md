@@ -21,7 +21,9 @@ relay-gated (requires an OpenCode UA + `Authorization`; a bare/missing bearer yi
 403 FreeTierError, or 403/1010 without an OpenCode UA). Whenever a skill would
 otherwise call the jev model directly, route it through this MCP (`mcp/jev/server.py`)
 instead — it resolves the key from the profile `.env` and sends the correct fingerprint
-+ auth. The only model in scope is `jev-1.13-free` (no fallbacks).
++ auth. The primary model in scope is `jev-1.13-free`; on free
+exhaustion (HTTP 429/403) with a real key, falls back to paid `jev-1.13` (same
+key/endpoint/UA; `JEV_FALLBACK_TO_PAID` default 1, `=0` fails open, no-key never).
 
 ## Procedure (in order)
 
