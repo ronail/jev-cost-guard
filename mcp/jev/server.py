@@ -257,9 +257,62 @@ def _jev_post(state: str, question: str, qtype: str = "noul",
 # ── MCP stdio server (minimal JSON-RPC, no dependencies) ──────────────────────
 
 
+# Framing is auto-detected per client: strict MCP clients (Claude Code, Codex)
+# speak Content-Length headers; Hermes' bundled MCP client reads newline-delimited
+# JSON. _FRAME records the client's framing (set by _read_stdin_message); _send
+# replies in the SAME framing so the server loads under Claude Code, Codex (strict)
+# and Hermes (JSON-lines) without regression.
+_FRAME: str | None = None
+
+
+def _read_stdin_message(stream) -> dict | None:
+    """Read one MCP message, auto-detecting Content-Length or newline-JSON framing."""
+    global _FRAME
+    if _FRAME is None:
+        first = stream.readline()
+        while first and not first.strip():
+            first = stream.readline()
+        if not first:
+            return None
+        if first.lower().startswith(b"content-length:"):
+            _FRAME = "crlf"
+            length = 0
+            line = first
+            while line.strip():
+                name, _, value = line.decode("utf-8", "replace").partition(":")
+                if name.strip().lower() == "content-length":
+                    length = int(value.strip() or 0)
+                line = stream.readline()
+            body = stream.read(length)
+            return json.loads(body.decode("utf-8", "replace")) if body else None
+        _FRAME = "jsonl"
+        return json.loads(first.decode("utf-8", "replace").strip())
+    if _FRAME == "crlf":
+        length = 0
+        line = stream.readline()
+        while line.strip():
+            name, _, value = line.decode("utf-8", "replace").partition(":")
+            if name.strip().lower() == "content-length":
+                length = int(value.strip() or 0)
+            line = stream.readline()
+        body = stream.read(length)
+        return json.loads(body.decode("utf-8", "replace")) if body else None
+    line = stream.readline()
+    if not line:
+        return None
+    return json.loads(line.decode("utf-8", "replace").strip())
+
+
 def _send(msg: dict) -> None:
-    sys.stdout.write(json.dumps(msg) + "\n")
-    sys.stdout.flush()
+    payload = json.dumps(msg).encode("utf-8")
+    if _FRAME == "crlf":
+        sys.stdout.buffer.write(
+            b"Content-Length: " + str(len(payload)).encode("utf-8")
+            + b"\r\n\r\n" + payload
+        )
+    else:
+        sys.stdout.buffer.write(payload + b"\n")
+    sys.stdout.buffer.flush()
 
 
 def _tool_health(arguments: dict | None) -> str:
@@ -369,14 +422,11 @@ def _handle_call(name: str, arguments: dict | None) -> dict:
 
 
 def main() -> None:
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    stream = sys.stdin.buffer
+    while True:
+        msg = _read_stdin_message(stream)
+        if msg is None:
+            break
         if not isinstance(msg, dict) or "jsonrpc" not in msg:
             continue
         mid = msg.get("id")
@@ -408,5 +458,44 @@ def main() -> None:
                                  "message": f"method not found: {method}"}})
 
 
+def _cli_verdict() -> None:
+    """One-shot CLI for Claude Code / Codex hook scripts that can't host the MCP
+    server. Reads `state` (the large tool output) from stdin, asks jev the
+    `is_successful` noul question, prints a JSON verdict line to stdout. Reuses
+    _jev_ask — same auth (OPENCODE_ZEN_API_KEY) + same paid fallback
+    (JEV_FALLBACK_TO_PAID / JEV_FALLBACK_MODEL). JEV_DEBUG=1 traces to stderr.
+
+    State is capped at 20k chars so a hook firing on huge outputs stays within
+    the jev-1.13-free free quota per call (larger bodies: use the jev_summarize
+    MCP tool instead).
+    """
+    state = sys.stdin.buffer.read().decode("utf-8", "replace")
+    try:
+        ans = _jev_ask(
+            state=state[:20000],
+            question="is_successful",
+            qtype="noul",
+            instructions="Does the above tool result indicate a successful, "
+            "clean outcome?",
+        )
+    except RuntimeError as e:
+        if os.environ.get("JEV_DEBUG"):
+            sys.stderr.write(f"[jev-debug] {e}\n")
+        print(json.dumps({"ok": False, "error": str(e)}))
+        return
+    if ans is None:
+        print(json.dumps({"ok": False, "error": "jev returned no answer"}))
+        return
+    n = ans.get("noul")
+    interp = "likely-success" if (n is None or n >= 0.5) else "likely-failure"
+    endpoint, model, _ = _resolve_jev_target()
+    print(json.dumps({"ok": True, "model": model, "endpoint": endpoint,
+                      "noul": n, "interpretation": interp}))
+
+
 if __name__ == "__main__":
-    main()
+    _a = sys.argv[1:]
+    if _a and _a[0] in ("--verdict", "-v"):
+        _cli_verdict()
+    else:
+        main()

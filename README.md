@@ -202,3 +202,33 @@ on any jev error (the original result is kept). The hook skips `jev_health` /
 > ⚠️ Enabling is systemic: a gated result loses its body. Start with a high
 > `JEV_THRESHOLD` and a narrow `JEV_GATE_TOOLS` (e.g. `bash`) to tune before
 > broadening.
+
+---
+
+## Using jev in Claude Code / Codex (portable MCP)
+
+The `mcp/jev/server.py` stdio server is **dual-frame**: it answers `Content-Length`
+requests (Claude Code, Codex — strict MCP clients) and newline-delimited JSON
+(Hermes' client), so the **same server loads in every harness** with no fork.
+Expose `OPENCODE_ZEN_API_KEY` (from `profiles/dev/.env`, never committed) in the
+harness env, then register `python3 <repo>/mcp/jev/server.py` in the harness's MCP
+registry. jev stays the **only** oracle model; Claude Code/Codex are pure clients.
+
+- **Claude Code**: `mcpServers.jev` in `~/.claude/claude_desktop_config.json`;
+  the server's tools appear natively — call `jev_summarize` on big outputs.
+- **Codex**: `codex mcp add jev -- python3 <repo>/mcp/jev/server.py` (env in
+  `codex.yml` `mcp_env` or the shell).
+
+### Auto-gate via hooks (soft — never blocks)
+
+`hooks/claude-codex-jev-verdict.py` is a `PostToolUse`-style hook for Claude Code
+and an equivalent hook point for Codex. It reads the tool output; if it exceeds
+`JEV_VERDICT_THRESHOLD_CHARS` (default 4000) it pipes it to
+`mcp/jev/server.py --verdict` (the server's one-shot CLI — **no** MCP server is
+hosted inside the hook), prints a JSON `is_successful` noul verdict, and
+**always exits 0** so a jev slip (rate limit / no key / 5xx / paid-exhaustion)
+never stalls a session. The verdict reuses `_jev_ask`, so the same `Bearer public`
+/ `Bearer <key>` auth and paid-jev fallback (`JEV_FALLBACK_TO_PAID` /
+`JEV_FALLBACK_MODEL`) apply; no-key runs free-tier only. Full per-harness wiring
+(config snippets) is in the `jev-mcp-model-server` skill under
+**Using jev in Claude Code and Codex**.
