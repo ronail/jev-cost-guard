@@ -211,24 +211,71 @@ The `mcp/jev/server.py` stdio server is **dual-frame**: it answers `Content-Leng
 requests (Claude Code, Codex — strict MCP clients) and newline-delimited JSON
 (Hermes' client), so the **same server loads in every harness** with no fork.
 Expose `OPENCODE_ZEN_API_KEY` (from `profiles/dev/.env`, never committed) in the
-harness env, then register `python3 <repo>/mcp/jev/server.py` in the harness's MCP
-registry. jev stays the **only** oracle model; Claude Code/Codex are pure clients.
+harness env, then register `python3 <repo>/mcp/jev/server.py` as an MCP server.
+jev stays the **only** oracle model; Claude Code/Codex are pure clients that call
+`jev_health` / `jev_summarize` like any other tool.
 
-- **Claude Code**: `mcpServers.jev` in `~/.claude/claude_desktop_config.json`;
-  the server's tools appear natively — call `jev_summarize` on big outputs.
-- **Codex**: `codex mcp add jev -- python3 <repo>/mcp/jev/server.py` (env in
-  `codex.yml` `mcp_env` or the shell).
+### Claude Code
 
-### Auto-gate via hooks (soft — never blocks)
+Add the server + hook to your Claude Code config (`~/.claude/.claude.json` or the
+legacy `~/.claude/claude_desktop_config.json`) — `mcpServers` and `hooks` go in the
+same file:
 
-`hooks/claude-codex-jev-verdict.py` is a `PostToolUse`-style hook for Claude Code
-and an equivalent hook point for Codex. It reads the tool output; if it exceeds
-`JEV_VERDICT_THRESHOLD_CHARS` (default 4000) it pipes it to
-`mcp/jev/server.py --verdict` (the server's one-shot CLI — **no** MCP server is
-hosted inside the hook), prints a JSON `is_successful` noul verdict, and
-**always exits 0** so a jev slip (rate limit / no key / 5xx / paid-exhaustion)
-never stalls a session. The verdict reuses `_jev_ask`, so the same `Bearer public`
-/ `Bearer <key>` auth and paid-jev fallback (`JEV_FALLBACK_TO_PAID` /
-`JEV_FALLBACK_MODEL`) apply; no-key runs free-tier only. Full per-harness wiring
-(config snippets) is in the `jev-mcp-model-server` skill under
-**Using jev in Claude Code and Codex**.
+```json
+{
+  "mcpServers": {
+    "jev": {
+      "command": "python3",
+      "args": ["/Users/ronail/Projects/jev-cost-guard/mcp/jev/server.py"],
+      "env": {
+        "JEV_MODEL": "jev-1.13-free",
+        "OPENCODE_ZEN_API_KEY": "<your opencode zen key; from profiles/dev/.env, never commit>"
+      }
+    }
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "command": "python3",
+        "args": ["/Users/ronail/Projects/jev-cost-guard/hooks/claude-codex-jev-verdict.py"],
+        "env": {
+          "OPENCODE_ZEN_API_KEY": "<your opencode zen key>",
+          "JEV_VERDICT_THRESHOLD_CHARS": "4000"
+        }
+      }
+    ]
+  }
+}
+```
+
+Restart Claude Code after editing. `PostToolUse` fires after each tool; the hook
+reads the tool output and, when it exceeds `JEV_VERDICT_THRESHOLD_CHARS`, pipes it
+to `mcp/jev/server.py --verdict` (a one-shot CLI — **no** MCP server is hosted in
+the hook), prints a JSON `is_successful` noul verdict, and **always exits 0** so a
+jev slip (rate limit / no key / 5xx / paid-exhaustion) never stalls a session.
+The verdict reuses `_jev_ask`, so the same `Bearer public` / `Bearer <key>` auth
+and paid-jev fallback (`JEV_FALLBACK_TO_PAID` / `JEV_FALLBACK_MODEL`) apply.
+
+### Codex
+
+Register the server with the verified CLI (writes `~/.codex/config.toml`):
+
+```sh
+codex mcp add jev -- python3 /Users/ronail/Projects/jev-cost-guard/mcp/jev/server.py \
+  --env JEV_MODEL=jev-1.13-free \
+  --env OPENCODE_ZEN_API_KEY=<your opencode zen key>
+```
+
+Codex surfaces jev tools natively. For the **auto-gate**, add a tool-result hook
+in `~/.codex/config.toml` that runs `hooks/claude-codex-jev-verdict.py` with the
+same env (check `codex --help` for the exact `hooks` schema on your version). Same
+soft-gate semantics: verdict logged, exits 0.
+
+### Hook verification
+
+```sh
+printf '{"tool_name":"bash","tool_result":{"output":"%s"}}' "$(python3 -c "print('x'*8000)")" \
+  | JEV_VERDICT_THRESHOLD_CHARS=1 python3 hooks/claude-codex-jev-verdict.py
+```
+
+Prints `[jev-gate] bash: ...` and exits 0 regardless of the jev outcome.
