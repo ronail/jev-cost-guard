@@ -41,27 +41,35 @@ skills-guard scan, and installs the skill. Add the wanted skills to each profile
 
 ### Mount the MCP (`mcp/jev`)
 A zero-dependency (pure stdlib, no pip) MCP server exposing `jev_health` +
-`jev_summarize`. It talks to the opencode-zen relay directly — not the agent's own
-provider — and uses **only `jev-1.13-free`**.
+`jev_summarize` for **TypeSafe jev** (System One decision model). It talks to
+either TypeSafe's own API or the OpenCode Zen relay directly — never the agent's
+own provider — and uses **only jev models**.
 
 ```bash
 hermes -p dev mcp add jev --command python3 --args <repo>/mcp/jev/server.py
 hermes -p dev mcp list        # -> jev ... 2 tools  enabled
 ```
 
-`JEV_MODEL` (default `jev-1.13-free`) and `JEV_ENDPOINT` (default
-`https://opencode.ai/zen/v1/systemone`) are **optional** — the server defaults them.
-The bearer key is **never** passed on the command line: the MCP reads
+**Providers (auto-selected, same request shape).** With `TYPESAFE_API_KEY` set the
+server calls TypeSafe directly — `https://api.typesafe.ai/v1/systemone`, model
+`jev-latest` (also `jev-1.13.0` / `jev-1.14.0`) — using `Bearer $TYPESAFE_API_KEY`
+and standard JSON headers; there is no free tier and no paid-fallback retry. With
+no TypeSafe key it uses the OpenCode Zen relay: `JEV_MODEL` (default
+`jev-1.13-free`) and `JEV_ENDPOINT` (default `https://opencode.ai/zen/v1/systemone`)
+are optional, the key is **never** on the command line, and the MCP reads
 `OPENCODE_ZEN_API_KEY` from `profiles/<profile>/.env` at runtime (Hermes does not
-inject profile secrets into MCP subprocesses). No browser/OAuth/device-flow. Set
-`JEV_DEBUG=1` for masked-key logs (prefix+suffix only). Auth modes (real key from
-`.env` or the relay free-tier `Bearer public` no-key bearer; OpenCode desktop UA +
-failure modes) are documented in `mcp/jev/env.example` and the server docstring.
+inject profile secrets into MCP subprocesses). Force either with
+`JEV_PROVIDER=typesafe|opencode`. No browser/OAuth/device-flow. Set `JEV_DEBUG=1`
+for redacted provider/key logs. Auth modes (real key, the relay free-tier
+`Bearer public` no-key bearer, OpenCode desktop UA fingerprint, and failure modes)
+are documented in `mcp/jev/env.example` and the server docstring.
 
 | env | default | note |
 |---|---|---|
-| `JEV_MODEL` | `jev-1.13-free` | optional — default model in scope |
-| `JEV_ENDPOINT` | `https://opencode.ai/zen/v1/systemone` | optional — System One endpoint |
+| `JEV_PROVIDER` | *(auto)* | `typesafe` when `TYPESAFE_API_KEY` is set, else `opencode` (Zen relay); force either |
+| `JEV_MODEL` | `jev-1.13-free` / `jev-latest` | optional — default is `jev-1.13-free` (opencode) or `jev-latest` (typesafe) |
+| `JEV_ENDPOINT` | `https://opencode.ai/zen/v1/systemone` | optional — System One endpoint (typesafe default: `https://api.typesafe.ai/v1/systemone`) |
+| `TYPESAFE_API_KEY` | (from `profiles/<profile>/.env`) | TypeSafe direct key — its presence selects `api.typesafe.ai` (`jev-latest`); no free tier, no fallback |
 | `JEV_FALLBACK_TO_PAID` | `1` | `1` (default) on `jev-1.13-free` exhaustion (HTTP 429/403 with a real key) retry the paid model; `0` fails open; no-key never falls back |
 | `JEV_FALLBACK_MODEL` | `jev-1.13` | paid model retried on free exhaustion (same key/endpoint/UA; bills your opencode account) |
 | `JEV_DEBUG` | `0` | optional — `1` = print masked key prefix/suffix |
