@@ -70,8 +70,8 @@ python3 <repo>/mcp/jev/server.py
 ```
 
 - **Hermes**: `hermes -p dev mcp add jev --command python3 --env JEV_MODEL=jev-1.13-free --args <repo>/mcp/jev/server.py` (already `mcp_servers.jev.enabled: true` in the dev profile).
-- **Claude Code**: `~/.claude/claude_desktop_config.json` → `mcpServers.jev = {command:"python3", args:["<repo>/mcp/jev/server.py"], env:{JEV_MODEL:"jev-1.13-free", OPENCODE_ZEN_API_KEY:"<key>"}}`. Claude Code sees jev tools (e.g. `jev_summarize`) like any other tool.
-- **Codex**: `codex mcp add jev -- python3 <repo>/mcp/jev/server.py` (with `JEV_MODEL`/`OPENCODE_ZEN_API_KEY` in `codex.yml` `mcp_env` or the shell). Codex exposes the jev tools as native tools.
+- **Claude Code**: add `mcpServers.jev` + `hooks.PostToolUse` to `~/.claude/.claude.json` (or the legacy `~/.claude/claude_desktop_config.json`) — see README `## Using jev in Claude Code / Codex` for the full JSON config.
+- **Codex**: `codex mcp add jev -- python3 <repo>/mcp/jev/server.py` (env in `~/.codex/config.toml` or the shell). Codex exposes the jev tools as native tools.
 
 ### Auto-gate (soft, never blocks) in Claude Code / Codex
 
@@ -81,14 +81,14 @@ that envelope, and when the output exceeds `JEV_VERDICT_THRESHOLD_CHARS`
 (default 4000) pipes it to `mcp/jev/server.py --verdict` (the **one-shot CLI**
 baked into the server — the hook hosts no MCP server). jev answers the
 `is_successful` noul question and the hook prints a JSON verdict line; it
-**always exits 0**, so a jev slip (rate limit, no key, 5xx) never stalls a
+**always exits 0**, so a jev slip (rate limit / no key / 5xx) never stalls a
 session — this is a soft gate that *annotates* results, it does not mutate the
 transcript. The verdict reuses `_jev_ask`, so the same auth + paid-jev fallback
 (`JEV_FALLBACK_TO_PAID` / `JEV_FALLBACK_MODEL`) applies; no-key runs free-tier
 `Bearer public` with no fallback. Register it:
 
-- Claude Code: `~/.claude/claude_desktop_config.json` → `hooks.PostToolUse = [{"command":"python3 <repo>/hooks/claude-codex-jev-verdict.py"}]`.
-- Codex: `codex.yml` → `hooks:` array firing the same script on a tool-result event.
+- Claude Code: `~/.claude/.claude.json` → `hooks.PostToolUse = [{"command":"python3 <repo>/hooks/claude-codex-jev-verdict.py", "env":{...}}]` (full JSON in README).
+- Codex: a tool-result hook in `~/.codex/config.toml` running the same script (see `codex --help` for the exact `hooks` schema).
 
 ## Pitfalls
 - HERMES_HOME is the profile dir under Hermes, not ~/.hermes. Try candidates: HERMES_HOME/.env, HERMES_HOME/profiles/<p>/.env, ~/.hermes/profiles/<p>/.env.
