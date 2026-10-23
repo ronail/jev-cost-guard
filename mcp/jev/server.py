@@ -125,11 +125,10 @@ def _load_profile_env_key(profile: str = "dev") -> str | None:
             return None
         if key:
             if os.environ.get("JEV_DEBUG"):
-                red = (key[:4] + "...") if key else None
                 sys.stderr.write(
                     f"[jev-debug] found key in {env_path} "
-                    f"(env_override={'yes' if os.environ.get('OPENCODE_API_KEY') else 'no'})"
-                    + (f" key={red}" if red else "") + "\n"
+                    f"(env_override={'yes' if os.environ.get('OPENCODE_API_KEY') else 'no'}); "
+                    f"key set (value redacted)\n"
                 )
             return key
     if os.environ.get("JEV_DEBUG"):
