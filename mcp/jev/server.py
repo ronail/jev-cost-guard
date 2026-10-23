@@ -269,26 +269,19 @@ def _jev_ask(state: str, question: str, qtype: str = "noul",
     return _jev_post(state, question, qtype, instructions, _retry_paid=True)
 
 
-def _jev_post(state: str, question: str, qtype: str = "noul",
-             instructions: str | None = None, *,
-             model: str | None = None, _retry_paid: bool = False,
-             criteria: dict | None = None) -> dict | None:
-    """Single (non-recursive) System One POST for `model` (or resolved default).
+def _systemone_post(state, questions: dict, *, model: str | None = None,
+                    _retry_paid: bool = False) -> dict:
+    """POST one System One request carrying ANY number of questions.
 
-    `_jev_ask` retries here with `model=<paid model>` on free-tier exhaustion.
-    `_retry_paid=False` on the retry bounds recursion; a paid model does not end
-    with `-free`, so it is never retried — paid exhaustion raises (caller fails
-    open).
+    One transport for every caller: `_jev_post` sends a single question, `jev_find`
+    sends a batch. TypeSafe's docs recommend asking several questions per request,
+    so a batch is a first-class path here rather than a second implementation.
+    Returns the `answers` map (possibly empty).
     """
     endpoint, default_model, key = _resolve_jev_target()
     model = model or default_model
     provider = _provider_for(endpoint)
-    q: dict = {"type": qtype}
-    if instructions:
-        q["instructions"] = instructions
-    if criteria:
-        q["criteria"] = criteria
-    body = {"model": model, "state": state, "questions": {question: q}}
+    body = {"model": model, "state": state, "questions": questions}
     if provider == "typesafe":
         # TypeSafe direct: a real TYPESAFE_API_KEY is required (no public bearer,
         # no free tier, no paid-model fallback).
@@ -323,7 +316,7 @@ def _jev_post(state: str, question: str, qtype: str = "noul",
     auth_tag = "key" if key else "public-bearer"
     dbg = (
         f"[jev-debug] POST {endpoint} provider={provider} model={model} "
-        f"auth={auth_tag} -> "
+        f"questions={len(questions)} auth={auth_tag} -> "
     )
     try:
         with _urlopen_retry(req, timeout=60) as resp:
@@ -353,8 +346,7 @@ def _jev_post(state: str, question: str, qtype: str = "noul",
                     f"[jev-debug] free-tier exhausted (HTTP {e.code}); "
                     f"retrying paid model {paid} (auth=key)\n"
                 )
-            return _jev_post(state, question, qtype, instructions,
-                             model=paid, _retry_paid=False)
+            return _systemone_post(state, questions, model=paid, _retry_paid=False)
         raise RuntimeError(
             f"jev request failed: HTTP {e.code} "
             f"(provider={provider}, auth={auth_tag}). response: {resp_body}"
@@ -363,8 +355,27 @@ def _jev_post(state: str, question: str, qtype: str = "noul",
         sys.stderr.write(dbg + "\n")
     data = json.loads(raw.decode("utf-8", "replace"))
     if not isinstance(data, dict):
-        return None
+        return {}
     answers = data.get("answers", {}) or {}
+    return answers if isinstance(answers, dict) else {}
+
+
+def _jev_post(state, question: str, qtype: str = "noul",
+             instructions: str | None = None, *,
+             model: str | None = None, _retry_paid: bool = False,
+             criteria: dict | None = None) -> dict | None:
+    """Single-question wrapper over `_systemone_post`; returns that answer.
+
+    `_jev_ask` retries with `model=<paid model>` on free-tier exhaustion;
+    `_retry_paid=False` on the retry bounds recursion.
+    """
+    q: dict = {"type": qtype}
+    if instructions:
+        q["instructions"] = instructions
+    if criteria:
+        q["criteria"] = criteria
+    answers = _systemone_post(state, {question: q}, model=model,
+                              _retry_paid=_retry_paid)
     return answers.get(question)
 
 
@@ -502,6 +513,24 @@ _FIND_SKIP_DIRS = {
 }
 _FIND_MAX_FILE_BYTES = 8000
 _FIND_MAX_CALLS = 12
+# Per-request budget for batched screening: TypeSafe allows 64k tokens per request
+# but only 32k per question (state + that question), so keep batches under it.
+_FIND_BATCH_CHARS = 40000  # ~10k tokens
+
+
+def _batch_by_size(items, max_chars: int):
+    """Group (lex, path, text) items so each batch's text fits max_chars."""
+    batch: list = []
+    size = 0
+    for item in items:
+        n = len(item[2])
+        if batch and size + n > max_chars:
+            yield batch
+            batch, size = [], 0
+        batch.append(item)
+        size += n
+    if batch:
+        yield batch
 
 
 def _find_terms(query: str) -> list[str]:
@@ -596,9 +625,6 @@ def _tool_find(arguments: dict | None) -> str:
 
     endpoint, _, _ = _resolve_jev_target()
     provider = _provider_for(endpoint)
-    instructions = (
-        f"Would a developer answering {query!r} need to read `file.content`?"
-    )
     criteria = {
         "true": "`file.content` defines, configures, or explains something the "
                 "query asks about",
@@ -607,25 +633,43 @@ def _tool_find(arguments: dict | None) -> str:
     }
 
     ranked: list[tuple[float, str, int, int]] = []
-    calls = 0
+    to_screen = candidates[:max_calls]
+    requests_made = 0
     failures = 0
-    for lex, path, text in candidates:
-        noul = -1.0
-        if not dry_run and calls < max_calls:
-            calls += 1
+    if dry_run:
+        for lex, path, text in to_screen:
+            ranked.append((-1.0, path, len(text), lex))
+    else:
+        # Batched screening: several files per request (docs: ask more than one
+        # question per call). Each question references its own `files.fN.content`.
+        for batch in _batch_by_size(to_screen, _FIND_BATCH_CHARS):
+            requests_made += 1
+            state = {
+                "files": {
+                    f"f{i}": {"path": p, "content": t}
+                    for i, (_, p, t) in enumerate(batch, 1)
+                }
+            }
+            questions = {
+                f"f{i}": {
+                    "type": "noul",
+                    "instructions": (
+                        f"Would a developer answering {query!r} need to read "
+                        f"`files.f{i}.content`?"
+                    ),
+                    "criteria": criteria,
+                }
+                for i, (_, _p, _t) in enumerate(batch, 1)
+            }
             try:
-                ans = _jev_post(
-                    state={"file": {"path": path, "content": text}},
-                    question="is_relevant",
-                    qtype="noul",
-                    instructions=instructions,
-                    criteria=criteria,
-                )
-                if ans and ans.get("noul") is not None:
-                    noul = float(ans["noul"])
-            except Exception:  # noqa: BLE001 — one bad file must not sink the scan
-                failures += 1
-        ranked.append((noul, path, len(text), lex))
+                answers = _systemone_post(state, questions, _retry_paid=True)
+            except Exception:  # noqa: BLE001 — one bad batch must not sink the scan
+                failures += len(batch)
+                answers = {}
+            for i, (lex, path, text) in enumerate(batch, 1):
+                a = answers.get(f"f{i}") or {}
+                noul = float(a["noul"]) if a.get("noul") is not None else -1.0
+                ranked.append((noul, path, len(text), lex))
 
     # RANK, don't gate. The re-ranking cookbook sorts by the probability itself;
     # a hard cut also hides the 0.3-0.7 band, which the Noul docs define as
@@ -648,7 +692,7 @@ def _tool_find(arguments: dict | None) -> str:
     lines = [
         f"[jev] jev_find query={query!r} root={root} glob={pattern!r} "
         f"provider={provider} scanned={scanned} candidates={len(candidates)} "
-        f"jev_calls={calls} failures={failures}"
+        f"screened={len(to_screen)} requests={requests_made} failures={failures}"
         + (" dry_run=true" if dry_run else "")
     ]
     if kept:
