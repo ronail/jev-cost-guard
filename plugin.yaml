@@ -2,14 +2,17 @@ name: jev-cost-guard
 version: "0.1.0"
 description: >
   Opt-in token-cost guard. Registers a `transform_tool_result` hook that gates
-  oversized tool results through jev-1.13-free (OpenCode Zen System One decision
-  model). When a tool result exceeds JEV_THRESHOLD tokens, the hook replaces the
-  result in the transcript with a ~7-token noul verdict, so the full body is not
-  re-sent on the next turn — a model-based trimming lever (NOT a deterministic
-  head+tail slice). Fails open (keeps the original result on any error). Skips
-  jev's own tools and already-judged verdicts (re-entry guard), and never gates
-  data-bearing tools (read_file/write_file/patch/...) by default. Enable in
-  plugins.enabled to activate; install-only leaves it inactive.
+  oversized tool results through jev (TypeSafe System One DECISION model) by
+  delegating to `mcp/jev/server.py --verdict` — provider selection (TypeSafe
+  direct when TYPESAFE_API_KEY is set, else the OpenCode zen relay) and every
+  fallback rule live in the server, so the hook, the MCP tools, and the Claude
+  Code/Codex hooks share one implementation. When a tool result exceeds
+  JEV_THRESHOLD tokens, the hook replaces the result in the transcript with a
+  ~7-token noul verdict, so the full body is not re-sent on the next turn.
+  Fails open (keeps the original result on any error). Skips jev's own tools and
+  already-judged verdicts (re-entry guard), and never gates data-bearing tools
+  (read_file/write_file/patch/...) by default. Enable in plugins.enabled to
+  activate; install-only leaves it inactive.
 author: "ronail/jev-cost-guard"
 provides_hooks:
   - transform_tool_result
