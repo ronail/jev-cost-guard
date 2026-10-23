@@ -582,6 +582,21 @@ def _jgrep_bin() -> str | None:
     return os.environ.get("JGREP_BIN") or shutil.which("jgrep")
 
 
+def _jgrep_env() -> dict:
+    """Environment for the jgrep subprocess.
+
+    jgrep reads the key from its own env (or ~/.config/jev/…), which the MCP
+    child may not have. We already resolve the key for our own requests, so pass
+    the same one through — never on the command line, where it would show in ps.
+    """
+    env = dict(os.environ)
+    if not env.get("TYPESAFE_API_KEY"):
+        key = _typesafe_key()
+        if key:
+            env["TYPESAFE_API_KEY"] = key
+    return env
+
+
 def _screen_with_jgrep(jgrep: str, query: str, paths: list[str],
                        max_bytes: int) -> list[tuple[float, str]] | None:
     """Rank `paths` with `jgrep --whole`, which asks one jev question per file.
@@ -601,7 +616,8 @@ def _screen_with_jgrep(jgrep: str, query: str, paths: list[str],
         f"--max-chars={max_bytes}", f"--budget={budget:g}", query, *paths,
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180,
+                              env=_jgrep_env())
     except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode not in (0, 1):
