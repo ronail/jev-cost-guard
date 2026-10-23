@@ -5,7 +5,8 @@ attacks the two real token leak classes visible in `hermes prompt-size`:
 
 1. **The fixed prompt is re-sent on every API call.** Tool schemas + the skills index
    are the fat. → pruned/audited by `jev-skill-gate` / `jev-prompt-budget-audit`.
-2. **Tool output bloats the transcript.** → auto-gated by `jev-1.13-free` through the
+2. **Tool output bloats the transcript.** → auto-gated by **jev** (TypeSafe, or the
+   OpenCode Zen free tier) through the
    `jev-cost-guard` hook plugin (replaces oversized results with a ~7-token `noul`
    verdict), or judged on-demand via the `mcp/jev` MCP.
 
@@ -37,7 +38,7 @@ skills-guard scan, and installs the skill. Add the wanted skills to each profile
 | `jev-delegate-guard` | pick the leanest child profile; break-even gate |
 | `jev-test-output-triage` | triaging test/log bloat |
 | `jev-source-digest` | triaging web/page bloat |
-| **`jev-mcp-model-server`** | usage guide: how/when to drive `jev-1.13-free` via this MCP |
+| **`jev-mcp-model-server`** | usage guide: how/when to drive jev (TypeSafe or zen) via this MCP |
 
 ### Mount the MCP (`mcp/jev`)
 A zero-dependency (pure stdlib, no pip) MCP server exposing `jev_health` +
@@ -82,9 +83,9 @@ question over a result `state` and returns a **success probability**, which is w
 you `budget_tokens`-gate on. jev is a decision model, not a summarizer.
 
 > The repo also ships the **`jev-cost-guard` hook plugin**, which *automatically*
-> gates oversized tool results (`transform_tool_result` → `jev-1.13-free` verdict)
-> so bloat is trimmed without the agent asking. Install it inactive, tune first,
-> then enable — see [jev-cost-guard plugin](#jev-cost-guard-plugin).
+> gates oversized tool results (`transform_tool_result` → jev `noul` verdict, via the
+> shared `server.py`) so bloat is trimmed without the agent asking. Install it
+> inactive, tune first, then enable — see [jev-cost-guard plugin](#jev-cost-guard-plugin).
 
 ---
 
@@ -165,21 +166,33 @@ faster it pays off. No other model is involved.
 
 | path | what |
 |---|---|
-| `mcp/jev/server.py` | the MCP server (stdlib, jev-1.13-free only; auth/failure modes in its docstring) |
-| `mcp/jev/mcp.json` | MCP manifest (defaults `JEV_MODEL`/`JEV_ENDPOINT`) |
-| `mcp/jev/env.example` | env reference (real key from `.env` + `Bearer public` no-key bearer + failure modes) |
+| `mcp/jev/server.py` | the one jev implementation: MCP stdio server (dual-frame) + `--verdict` CLI; owns provider selection (TypeSafe / OpenCode Zen) and every fallback |
+| `mcp/jev/mcp.json` | MCP manifest (provider autodetected; no hardcoded model/endpoint) |
+| `mcp/jev/env.example` | env reference: TypeSafe + Zen auth, fallback knobs, failure modes |
 | `hermes/` | the `jev-*` Hermes skills |
 | `SKILLS.md` | index + per-profile wiring |
 | `docs/token-savings.md` | token-accounting + cap-removal history |
-|| `LICENSE` | MIT |
-|| `plugin.yaml` | jev-cost-guard plugin manifest (repo-root) |
-|| `__init__.py` | jev-cost-guard plugin: register(ctx) + transform_tool_result hook |
+| `LICENSE` | MIT |
+| `plugin.yaml` | jev-cost-guard plugin manifest (repo-root) |
+| `__init__.py` | jev-cost-guard hook: policy + delegation to `server.py --verdict` (~160 lines, fail-open) |
 
 ## jev-cost-guard plugin
 
 An **opt-in** hook plugin (named to match the repo) that auto-gates oversized tool
-results through `jev-1.13-free`, replacing the result in-transcript with a ~7-token
-`noul` verdict so the body is not re-sent on later turns.
+results through **jev**, replacing the result in-transcript with a ~7-token `noul`
+verdict so the body is not re-sent on later turns.
+
+The hook contains **no jev client of its own** — it shells out to the same
+implementation the MCP uses:
+
+```
+tool result → transform_tool_result → python3 mcp/jev/server.py --verdict → noul verdict
+```
+
+Provider selection (**TypeSafe** when `TYPESAFE_API_KEY` is set, else the OpenCode
+Zen relay) and the entire fallback chain live in `mcp/jev/server.py`, shared with the
+`jev_health` / `jev_summarize` MCP tools and the Claude Code / Codex hooks, so the
+surfaces cannot drift apart. `__init__.py` is ~160 lines of policy + delegation.
 
 Install (inactive — the hook does **not** fire until you enable it):
 
@@ -190,26 +203,33 @@ original output is dropped from context):
 
     hermes -p dev plugins enable jev-cost-guard
 
-Tunables (env or `profiles/dev/.env`):
+Plugin tunables (env or `profiles/<profile>/.env`):
 
 | var | default | meaning |
 |---|---|---|
 | `JEV_THRESHOLD` | `1000` | gate results > N tokens (~4N chars) |
 | `JEV_GATE_TOOLS` | *(empty)* | comma-list to gate only these tools |
 | `JEV_SKIP_TOOLS` | `read_file,write_file,patch,edit_file,skill_manage` | never gate these |
-| `JEV_DEBUG` | `0` | `1` logs per-call diagnostics |
-| `JEV_MODEL` / `JEV_ENDPOINT` | `jev-1.13-free` / `https://opencode.ai/zen/v1/systemone` | the jev target |
-| `JEV_FALLBACK_TO_PAID` | `1` | on `jev-1.13-free` exhaustion (HTTP 429/403) with a real key, retry paid `jev-1.13` (same key/endpoint/UA; bills your opencode account); `0` fails open; no-key never falls back |
-| `JEV_FALLBACK_MODEL` | `jev-1.13` | paid model retried on free exhaustion |
+| `JEV_DEBUG` | unset | any non-empty value logs per-call diagnostics (e.g. `verbose` — **not** `1`: MCP/config env values must be strings) |
+| `JEV_SERVER_PATH` | `<plugin>/mcp/jev/server.py` | override the delegated server |
+| `JEV_VERDICT_TIMEOUT` | `75` | subprocess timeout in seconds |
 
-Auth reuses the dev credential the `jev` MCP uses (`OPENCODE_ZEN_API_KEY` from
-`profiles/dev/.env`); `Bearer public` is used for the no-key free tier. **Fail-open**
-on any jev error (the original result is kept). The hook skips `jev_health` /
-`jev_summarize` and any already-judged `[jev]` verdict (re-entry guard).
+Provider/fallback knobs are **not** plugin settings — they belong to the server and
+therefore apply to every surface: `TYPESAFE_API_KEY`, `OPENCODE_ZEN_API_KEY`,
+`JEV_PROVIDER`, `JEV_MODEL`, `JEV_ENDPOINT`, `JEV_FALLBACK_TO_PAID`,
+`JEV_FALLBACK_MODEL` (documented in `mcp/jev/env.example`).
+
+**Fail-open** by construction: missing server, non-zero exit, unparseable JSON, or a
+non-`ok` verdict all leave the original result untouched. The hook skips `jev_health`
+/ `jev_summarize` and any already-judged `[jev]` verdict (re-entry guard).
 
 > ⚠️ Enabling is systemic: a gated result loses its body. Start with a high
 > `JEV_THRESHOLD` and a narrow `JEV_GATE_TOOLS` (e.g. `bash`) to tune before
 > broadening.
+
+> 💸 Cost: with `TYPESAFE_API_KEY` set the hook bills TypeSafe on **every** gate.
+> Use `JEV_PROVIDER=opencode` (or unset the TypeSafe key) to prefer the free Zen tier,
+> and raise `JEV_THRESHOLD` to gate less often.
 
 ---
 
@@ -236,8 +256,7 @@ same file:
       "command": "python3",
       "args": ["/Users/ronail/Projects/jev-cost-guard/mcp/jev/server.py"],
       "env": {
-        "JEV_MODEL": "jev-1.13-free",
-        "OPENCODE_ZEN_API_KEY": "<your opencode zen key; from profiles/dev/.env, never commit>"
+        "TYPESAFE_API_KEY": "<your TypeSafe key; from profiles/dev/.env, never commit>"
       }
     }
   },
@@ -247,7 +266,7 @@ same file:
         "command": "python3",
         "args": ["/Users/ronail/Projects/jev-cost-guard/hooks/claude-codex-jev-verdict.py"],
         "env": {
-          "OPENCODE_ZEN_API_KEY": "<your opencode zen key>",
+          "TYPESAFE_API_KEY": "<your TypeSafe key>",
           "JEV_VERDICT_THRESHOLD_CHARS": "4000"
         }
       }
@@ -255,6 +274,10 @@ same file:
   }
 }
 ```
+
+Substitute `OPENCODE_ZEN_API_KEY` for `TYPESAFE_API_KEY` (and optionally
+`JEV_MODEL=jev-1.13-free`) to run these on the Zen relay instead — the server
+autodetects the provider from whichever key is present.
 
 Restart Claude Code after editing. `PostToolUse` fires after each tool; the hook
 reads the tool output and, when it exceeds `JEV_VERDICT_THRESHOLD_CHARS`, pipes it
@@ -270,9 +293,10 @@ Register the server with the verified CLI (writes `~/.codex/config.toml`):
 
 ```sh
 codex mcp add jev -- python3 /Users/ronail/Projects/jev-cost-guard/mcp/jev/server.py \
-  --env JEV_MODEL=jev-1.13-free \
-  --env OPENCODE_ZEN_API_KEY=<your opencode zen key>
+  --env TYPESAFE_API_KEY=<your TypeSafe key>
 ```
+
+(Use `--env OPENCODE_ZEN_API_KEY=<key>` instead to run on the Zen relay.)
 
 Codex surfaces jev tools natively. For the **auto-gate**, add a tool-result hook
 in `~/.codex/config.toml` that runs `hooks/claude-codex-jev-verdict.py` with the

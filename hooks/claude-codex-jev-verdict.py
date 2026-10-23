@@ -5,10 +5,12 @@ Soft auto-gate (NEVER blocks the harness). Reads the harness hook envelope on
 stdin, extracts the tool output, and when it exceeds JEV_VERDICT_THRESHOLD_CHARS
 (default 4000) pipes it to ../mcp/jev/server.py --verdict, which asks jev the
 `is_successful` noul question and prints a JSON verdict line. The jev call
-uses OPENCODE_ZEN_API_KEY (inherited from the harness env) with paid fallback
-(JEV_FALLBACK_TO_PAID / JEV_FALLBACK_MODEL); no key => Bearer public (free tier,
-no fallback). Prints the verdict to stdout (the harness surfaces it), always
-exits 0 so a jev slip never stalls a session.
+inherits the harness env: `TYPESAFE_API_KEY` (preferred — api.typesafe.ai,
+`jev-latest`) or `OPENCODE_ZEN_API_KEY` (zen relay, with its paid/TypeSafe
+fallbacks); the server picks the provider from whichever key is present. With no
+key at all it uses the zen `Bearer public` free tier. Prints the verdict to
+stdout (the harness surfaces it), always exits 0 so a jev slip never stalls a
+session.
 
 Wiring:
   Claude Code: ~/.claude/claude_desktop_config.json  ->  hooks.PostToolUse
