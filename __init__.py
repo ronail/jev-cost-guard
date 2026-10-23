@@ -9,24 +9,25 @@ else the OpenCode zen relay) and *every* fallback rule live in the server — on
 place. The Hermes hook, the `jev_health`/`jev_summarize` MCP tools, and the
 Claude Code / Codex hooks therefore cannot drift apart.
 
-Chain inside the server (see server.py):
-  jev-1.13-free (zen) -> paid JEV_FALLBACK_MODEL on 429/403 -> TypeSafe
-  jev-latest on 402/403/429 when TYPESAFE_API_KEY exists. Each layer is
-  individually switchable (JEV_FALLBACK_TO_PAID / JEV_FALLBACK_TO_TYPESAFE).
-
-Policy (deliberately conservative + opt-in):
+Policy — DEFAULT-DENY, because a verdict REPLACES the result (it is lossy):
   * Inactive unless the plugin is listed in `plugins.enabled`.
-  * Only gates results larger than JEV_THRESHOLD tokens (default 1000, ~4 chars/token).
+  * Gates ONLY tools explicitly named in `JEV_GATE_TOOLS` (comma list).
+    Unset/empty => the hook does nothing at all.
+  * Never allowlist data-retrieval tools — the payload IS the answer
+    (read_file, search_files, web_search, web_extract, browser_exec, ...).
+    A verdict there destroys information instead of compressing it. Only
+    diagnostic-noise tools belong on the list (`terminal` build/test logs,
+    batch runs), and even `terminal` can carry data (`cat`, `curl`).
+  * `JEV_SKIP_TOOLS` is an optional second layer that denies an allowlisted tool.
+  * Only gates results larger than `JEV_THRESHOLD` tokens (default 1000, ~4 chars/token).
   * Skips jev's own tools (jev_health/jev_summarize) and any result that is
     already a `[jev]` verdict (re-entry guard).
-  * Never gates data-bearing tools the agent needs verbatim (read_file,
-    write_file, patch, edit_file, skill_manage) — overridable via JEV_SKIP_TOOLS.
-    Set JEV_GATE_TOOLS (comma list) to gate ONLY those tools.
   * FAILS OPEN: any error leaves the original, full result in place.
-  * JEV_DEBUG=1 prints per-call diagnostics (never key material).
+  * Tunables resolve from the process env first, then the profile `.env`,
+    then their defaults (Hermes does not inject `.env` into the plugin host).
 
-Tunables: JEV_THRESHOLD, JEV_GATE_TOOLS, JEV_SKIP_TOOLS, JEV_DEBUG,
-JEV_SERVER_PATH (override the server location), JEV_VERDICT_TIMEOUT (seconds).
+Tunables: `JEV_GATE_TOOLS` (required to activate), `JEV_THRESHOLD`,
+`JEV_SKIP_TOOLS`, `JEV_DEBUG`, `JEV_SERVER_PATH`, `JEV_VERDICT_TIMEOUT`.
 """
 from __future__ import annotations
 
@@ -35,11 +36,43 @@ import os
 import subprocess
 import sys
 
-_SKIP_DEFAULT = "read_file,write_file,patch,edit_file,skill_manage"
+
+def _env_candidates() -> list[str]:
+    """Profile .env paths (Hermes does not inject .env into the plugin host)."""
+    hermes_home = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+    prof = os.environ.get("HERMES_PROFILE") or os.environ.get("JEV_PROFILE") or "dev"
+    paths = [
+        os.path.join(hermes_home, ".env"),
+        os.path.join(hermes_home, "profiles", prof, ".env"),
+    ]
+    base = os.environ.get("HERMES_HOME_BASE") or os.path.expanduser("~/.hermes")
+    if base != hermes_home:
+        paths.append(os.path.join(base, "profiles", prof, ".env"))
+    return paths
+
+
+def _setting(name: str, default: str | None = None) -> str | None:
+    """Resolve a tunable: process env first, then the profile .env, then default."""
+    val = os.environ.get(name)
+    if val:
+        return val
+    for path in _env_candidates():
+        try:
+            with open(path, "r") as fh:
+                for line in fh:
+                    s = line.strip()
+                    if not s or s.startswith("#") or "=" not in s:
+                        continue
+                    k, _, v = s.partition("=")
+                    if k.strip() == name:
+                        return v.strip().strip('"').strip("'")
+        except OSError:
+            continue
+    return default
 
 
 def _dbg(msg: str) -> None:
-    if os.environ.get("JEV_DEBUG"):
+    if _setting("JEV_DEBUG"):
         sys.stderr.write(f"[jev-cost-guard] {msg}\n")
         sys.stderr.flush()
 
@@ -55,7 +88,7 @@ def _server_path() -> str:
     plugin directory (`<plugin>/mcp/jev/server.py`), which is what a git install
     of this repo provides.
     """
-    explicit = os.environ.get("JEV_SERVER_PATH")
+    explicit = _setting("JEV_SERVER_PATH")
     if explicit and os.path.exists(explicit):
         return explicit
     return os.path.join(
@@ -75,7 +108,7 @@ def _jev_verdict(state: str) -> dict | None:
         _dbg(f"server missing at {server!r}; fail open")
         return None
     try:
-        timeout = float(os.environ.get("JEV_VERDICT_TIMEOUT", "75"))
+        timeout = float(_setting("JEV_VERDICT_TIMEOUT") or "75")
     except ValueError:
         timeout = 75.0
     try:
@@ -91,7 +124,7 @@ def _jev_verdict(state: str) -> dict | None:
         return None
     out = proc.stdout.decode("utf-8", "replace").strip()
     err = proc.stderr.decode("utf-8", "replace").strip()
-    if err and os.environ.get("JEV_DEBUG"):
+    if err and _setting("JEV_DEBUG"):
         for line in err.splitlines()[-4:]:
             _dbg(f"server: {line}")
     if proc.returncode != 0 or not out:
@@ -119,15 +152,16 @@ def _on_transform_tool_result(tool_name: str = "", args: object = None,
     if result.lstrip().startswith("[jev]"):
         return None
 
-    skip = set(_csv(os.environ.get("JEV_SKIP_TOOLS")) or _csv(_SKIP_DEFAULT))
-    allow = _csv(os.environ.get("JEV_GATE_TOOLS"))
-    if tool_name in skip:
+    # DEFAULT-DENY. Only tools explicitly named in JEV_GATE_TOOLS are gated;
+    # an empty list means the hook is inert. JEV_SKIP_TOOLS is a second layer.
+    allow = _csv(_setting("JEV_GATE_TOOLS"))
+    if not allow or tool_name not in allow:
         return None
-    if allow and tool_name not in allow:
+    if tool_name in set(_csv(_setting("JEV_SKIP_TOOLS"))):
         return None
 
     try:
-        threshold = int(os.environ.get("JEV_THRESHOLD", "1000"))
+        threshold = int(_setting("JEV_THRESHOLD") or "1000")
     except ValueError:
         threshold = 1000
     # rough token estimate: ~4 chars/token
@@ -148,7 +182,7 @@ def _on_transform_tool_result(tool_name: str = "", args: object = None,
         f"[jev] is_successful noul={n} -> {interp} "
         f"(jev System One decision via {model}; ~7 output tokens, not a digest; "
         f"gated tool='{tool_name}' result_len={len(result)}; "
-        f"set JEV_THRESHOLD=0 to keep full output)"
+        f"remove '{tool_name}' from JEV_GATE_TOOLS to keep full output)"
     )
     _dbg(f"gated tool='{tool_name}': {len(result)} chars -> noul={n} ({model})")
     return text
