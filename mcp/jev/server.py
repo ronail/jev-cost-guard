@@ -561,10 +561,13 @@ def _tool_find(arguments: dict | None) -> str:
     if not os.path.isdir(root):
         return f"[jev] jev_find: root is not a directory: {root}"
     pattern = str(args.get("glob") or "*")
+    # threshold is an OPTIONAL filter, not a default cut: the re-ranking
+    # cookbook uses the probability itself and sorts by it.
+    raw_threshold = args.get("threshold")
     try:
-        threshold = float(args.get("threshold", 0.6))
+        threshold = float(raw_threshold) if raw_threshold is not None else None
     except (TypeError, ValueError):
-        threshold = 0.6
+        threshold = None
     try:
         max_bytes = int(args.get("max_bytes") or _FIND_MAX_FILE_BYTES)
     except (TypeError, ValueError):
@@ -594,13 +597,13 @@ def _tool_find(arguments: dict | None) -> str:
     endpoint, _, _ = _resolve_jev_target()
     provider = _provider_for(endpoint)
     instructions = (
-        "Does this file contain information that directly helps answer the "
-        f"query: {query!r}?"
+        f"Would a developer answering {query!r} need to read `file.content`?"
     )
     criteria = {
-        "true": "definitions, configuration, or prose that answers or materially "
-                "advances the query",
-        "false": "unrelated content, incidental keyword matches, or boilerplate",
+        "true": "`file.content` defines, configures, or explains something the "
+                "query asks about",
+        "false": "`file.content` mentions the query's terms only incidentally, or "
+                 "is unrelated boilerplate",
     }
 
     ranked: list[tuple[float, str, int, int]] = []
@@ -612,7 +615,7 @@ def _tool_find(arguments: dict | None) -> str:
             calls += 1
             try:
                 ans = _jev_post(
-                    state=f"FILE: {path}\n\n{text}",
+                    state={"file": {"path": path, "content": text}},
                     question="is_relevant",
                     qtype="noul",
                     instructions=instructions,
@@ -624,8 +627,23 @@ def _tool_find(arguments: dict | None) -> str:
                 failures += 1
         ranked.append((noul, path, len(text), lex))
 
-    hits = sorted([r for r in ranked if r[0] >= threshold], key=lambda r: -r[0])
-    misses = [r for r in ranked if r[0] < threshold]
+    # RANK, don't gate. The re-ranking cookbook sorts by the probability itself;
+    # a hard cut also hides the 0.3-0.7 band, which the Noul docs define as
+    # "similar probability for yes and no", not as a medium score.
+    ordered = sorted(ranked, key=lambda r: (-r[0] if r[0] >= 0 else 1, r[1]))
+    kept = ordered if threshold is None else [
+        r for r in ordered if r[0] >= threshold or r[0] < 0
+    ]
+    dropped = len(ordered) - len(kept)
+
+    def band(n: float) -> str:
+        if n < 0:
+            return "unscored"
+        if n >= 0.7:
+            return "likely"
+        if n >= 0.3:
+            return "ambiguous"
+        return "unlikely"
 
     lines = [
         f"[jev] jev_find query={query!r} root={root} glob={pattern!r} "
@@ -633,20 +651,21 @@ def _tool_find(arguments: dict | None) -> str:
         f"jev_calls={calls} failures={failures}"
         + (" dry_run=true" if dry_run else "")
     ]
-    if hits:
-        lines.append(f"matches (noul >= {threshold:g}):")
-        for noul, path, size, lex in hits:
-            lines.append(f"  {noul:.2f}  {path}  ({size} chars, {lex} lexical hits)")
-    else:
-        lines.append(f"no file scored >= {threshold:g}")
-    if misses:
-        lines.append("below threshold (do not read without another reason):")
-        for noul, path, size, lex in misses[:8]:
+    if kept:
+        lines.append("ranked by relevance (highest first; bands 0.7 / 0.3):")
+        for noul, path, size, lex in kept[: max_calls * 2]:
             shown = "n/a" if noul < 0 else f"{noul:.2f}"
-            lines.append(f"  {shown}  {path}  ({size} chars, {lex} lexical hits)")
+            lines.append(
+                f"  {shown:<5} {band(noul):<9} {path}  "
+                f"({size} chars, {lex} lexical hits)"
+            )
+    else:
+        lines.append("no candidates to rank")
+    if threshold is not None:
+        lines.append(f"threshold={threshold:g} filtered {dropped} row(s)")
     lines.append(
         "note: contents were screened server-side and are NOT included above; "
-        "read only the matches (preferably with offset/limit)."
+        "treat this as a ranking — read the likely rows first (with offset/limit)."
     )
     return "\n".join(lines)
 
@@ -699,8 +718,10 @@ _TOOLS = {
                          "description": "Directory to search (default: current dir)."},
                 "glob": {"type": "string",
                          "description": "Filename glob filter, e.g. '*.py' (default '*')."},
-                "threshold": {"type": "number", "default": 0.6,
-                              "description": "Minimum noul to count as a match."},
+                "threshold": {"type": "number",
+                              "description": "Optional filter: drop rows below this "
+                                             "noul. Default: no filter (the list is "
+                                             "ranked, per the re-ranking cookbook)."},
                 "max_calls": {"type": "integer",
                               "description": "Max jev calls (default 12, hard cap 40)."},
                 "max_bytes": {"type": "integer",
