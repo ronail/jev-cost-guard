@@ -1,18 +1,22 @@
 name: jev-cost-guard
-version: "0.2.0"
+version: "0.3.0"
 description: >
   Opt-in token-cost guard. Registers a `transform_tool_result` hook that gates
   oversized tool results through jev (TypeSafe System One DECISION model) by
   delegating to `mcp/jev/server.py --verdict` — provider selection (TypeSafe
   direct when TYPESAFE_API_KEY is set, else the OpenCode zen relay) and every
   fallback rule live in the server, so the hook, the MCP tools, and the Claude
-  Code/Codex hooks share one implementation. When a tool result exceeds
-  JEV_THRESHOLD tokens, the hook replaces the result in the transcript with a
-  ~7-token noul verdict, so the full body is not re-sent on the next turn.
-  Fails open (keeps the original result on any error). Skips jev's own tools and
-  already-judged verdicts (re-entry guard), and never gates data-bearing tools
-  (read_file/write_file/patch/...) by default. Enable in plugins.enabled to
-  activate; install-only leaves it inactive.
+  Code/Codex hooks share one implementation.
+  DEFAULT-DENY: a replacement verdict DESTROYS the original result, so only tools
+  explicitly listed in JEV_GATE_TOOLS are gated; with the list unset the hook is
+  inert. Data-retrieval tools (read_file, search_files, web_search, web_extract,
+  browser_exec) must never be allowlisted — their payload is the answer. Intended
+  targets are diagnostic-noise tools (terminal build/test output, batch runs).
+  Within an allowlisted tool, only results over JEV_THRESHOLD tokens are gated;
+  JEV_SKIP_TOOLS is an optional second deny layer. Fails open (keeps the original
+  result on any error). Skips jev's own tools and already-judged verdicts
+  (re-entry guard). Enable in plugins.enabled to activate; install-only leaves it
+  inactive.
 author: "ronail/jev-cost-guard"
 provides_hooks:
   - transform_tool_result
