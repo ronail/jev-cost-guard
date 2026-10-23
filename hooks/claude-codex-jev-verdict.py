@@ -13,7 +13,7 @@ exits 0 so a jev slip never stalls a session.
 Wiring:
   Claude Code: ~/.claude/claude_desktop_config.json  ->  hooks.PostToolUse
       [{"command": "python3 /repo/hooks/claude-codex-jev-verdict.py"}]
-  Codex:       codex.yml  ->  hooks  (same script; envelope has tool_name + output)
+  Codex:       ~/.codex/config.toml -> hooks (same script; envelope has tool_name + output)
 """
 import json, os, subprocess, sys
 
