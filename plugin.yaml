@@ -1,5 +1,5 @@
 name: jev-cost-guard
-version: "0.1.0"
+version: "0.2.0"
 description: >
   Opt-in token-cost guard. Registers a `transform_tool_result` hook that gates
   oversized tool results through jev (TypeSafe System One DECISION model) by
