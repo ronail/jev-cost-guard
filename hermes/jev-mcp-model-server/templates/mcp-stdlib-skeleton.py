@@ -18,9 +18,60 @@ FP = {
 }
 
 
+# Framing is auto-detected per client so this skeleton is loadable everywhere:
+# strict MCP clients (Claude Code, Codex) speak Content-Length; Hermes' MCP
+# client reads newline-delimited JSON. _FRAME is set on the first message and
+# _send replies in the same framing.
+_FRAME = None
+
+
+def _read_stdin_message(stream):
+    """Read one MCP message, auto-detecting Content-Length or newline-JSON framing."""
+    global _FRAME
+    if _FRAME is None:
+        first = stream.readline()
+        while first and not first.strip():
+            first = stream.readline()
+        if not first:
+            return None
+        if first.lower().startswith(b"content-length:"):
+            _FRAME = "crlf"
+            length = 0
+            line = first
+            while line.strip():
+                name, _, value = line.decode("utf-8", "replace").partition(":")
+                if name.strip().lower() == "content-length":
+                    length = int(value.strip() or 0)
+                line = stream.readline()
+            body = stream.read(length)
+            return json.loads(body.decode("utf-8", "replace")) if body else None
+        _FRAME = "jsonl"
+        return json.loads(first.decode("utf-8", "replace").strip())
+    if _FRAME == "crlf":
+        length = 0
+        line = stream.readline()
+        while line.strip():
+            name, _, value = line.decode("utf-8", "replace").partition(":")
+            if name.strip().lower() == "content-length":
+                length = int(value.strip() or 0)
+            line = stream.readline()
+        body = stream.read(length)
+        return json.loads(body.decode("utf-8", "replace")) if body else None
+    line = stream.readline()
+    if not line:
+        return None
+    return json.loads(line.decode("utf-8", "replace").strip())
+
+
 def _send(msg):
-    sys.stdout.write(json.dumps(msg) + NL)
-    sys.stdout.flush()
+    payload = json.dumps(msg).encode("utf-8")
+    if _FRAME == "crlf":
+        sys.stdout.buffer.write(
+            b"Content-Length: " + str(len(payload)).encode("utf-8")
+            + b"\r\n\r\n" + payload)
+    else:
+        sys.stdout.buffer.write(payload + b"\n")
+    sys.stdout.buffer.flush()
 
 
 def _load_key():
@@ -67,10 +118,13 @@ def _ask(state, question, instructions, qtype='noul'):
 
 
 def main():
-    for line in sys.stdin:
-        if not line.strip():
+    stream = sys.stdin.buffer
+    while True:
+        msg = _read_stdin_message(stream)
+        if msg is None:
+            break
+        if not isinstance(msg, dict) or 'jsonrpc' not in msg:
             continue
-        msg = json.loads(line)
         mid, method, params = msg.get('id'), msg.get('method'), msg.get('params') or {}
         if method == 'initialize':
             _send({'jsonrpc': '2.0', 'id': mid, 'result': {
