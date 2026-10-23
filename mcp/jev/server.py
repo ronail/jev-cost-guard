@@ -50,7 +50,13 @@ Tools:
   jev_summarize   query jev for a success/failure probability over a text `state`
                   (~21 output tokens). Cheap gating signal, NOT a text digest;
                   jev is a decision model and cannot summarize to tokens.
+  jev_find        screen candidate files for a query BEFORE the main model reads
+                  them: free lexical prefilter, then one jev noul per candidate
+                  ("does this file help answer the query?"). Returns paths +
+                  probabilities only — contents stay server-side — so read only
+                  the matches. Costs one jev call per candidate.
 Config:
+  JEV_FIND_MAX_CALLS   jev_find's jev-call budget (default 12, hard cap 40).
   JEV_PROVIDER  typesafe | opencode. Auto: TypeSafe when TYPESAFE_API_KEY is set,
                 else the OpenCode zen relay (default, unchanged).
   JEV_MODEL     model id (opencode default jev-1.13-free; typesafe default jev-latest).
@@ -68,8 +74,10 @@ Config:
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -235,7 +243,8 @@ def _jev_ask(state: str, question: str, qtype: str = "noul",
 
 def _jev_post(state: str, question: str, qtype: str = "noul",
              instructions: str | None = None, *,
-             model: str | None = None, _retry_paid: bool = False) -> dict | None:
+             model: str | None = None, _retry_paid: bool = False,
+             criteria: dict | None = None) -> dict | None:
     """Single (non-recursive) System One POST for `model` (or resolved default).
 
     `_jev_ask` retries here with `model=<paid model>` on free-tier exhaustion.
@@ -249,6 +258,8 @@ def _jev_post(state: str, question: str, qtype: str = "noul",
     q: dict = {"type": qtype}
     if instructions:
         q["instructions"] = instructions
+    if criteria:
+        q["criteria"] = criteria
     body = {"model": model, "state": state, "questions": {question: q}}
     if provider == "typesafe":
         # TypeSafe direct: a real TYPESAFE_API_KEY is required (no public bearer,
@@ -452,6 +463,166 @@ def _tool_summarize(arguments: dict | None) -> str:
         return f"[jev] error: {type(e).__name__}: {e}"
 
 
+# ── jev_find: screen candidate files with jev BEFORE the main model reads them ──
+# The hook cannot do this — it fires after a tool has already returned. Here the
+# file bodies are read server-side and never enter the agent transcript: only
+# paths + probabilities come back, so the main model reads just the winners.
+_FIND_SKIP_DIRS = {
+    ".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build",
+    ".next", "target", ".mypy_cache", ".pytest_cache", ".ruff_cache", "cache",
+    ".idea", ".vscode", "Pods", ".terraform",
+}
+_FIND_MAX_FILE_BYTES = 8000
+_FIND_MAX_CALLS = 12
+
+
+def _find_terms(query: str) -> list[str]:
+    return [t for t in re.split(r"\W+", query.lower()) if len(t) > 2]
+
+
+def _read_text_capped(path: str, max_bytes: int) -> str | None:
+    """Read up to max_bytes as text; None for binary/unreadable files."""
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read(max_bytes)
+    except OSError:
+        return None
+    if b"\x00" in raw[:2048]:
+        return None
+    return raw.decode("utf-8", "replace")
+
+
+def _walk_candidates(root: str, pattern: str, terms: list[str],
+                     max_candidates: int, max_bytes: int):
+    """Lexically prefilter the tree (free, deterministic) before jev is asked.
+
+    Returns (scanned_count, [(lexical_score, path, text)] desc by score).
+    """
+    scored: list[tuple[int, str, str]] = []
+    scanned = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _FIND_SKIP_DIRS]
+        for name in filenames:
+            if pattern not in ("*", "") and not fnmatch.fnmatch(name, pattern):
+                continue
+            path = os.path.join(dirpath, name)
+            scanned += 1
+            text = _read_text_capped(path, max_bytes)
+            if text is None:
+                continue
+            low = text.lower()
+            score = sum(low.count(t) for t in terms)
+            if score:
+                scored.append((score, path, text))
+    scored.sort(key=lambda item: -item[0])
+    return scanned, scored[:max_candidates]
+
+
+def _tool_find(arguments: dict | None) -> str:
+    """Rank candidate files by jev relevance WITHOUT putting their content in context.
+
+    Stage 1: lexical prefilter over the filesystem (free, no model).
+    Stage 2: one jev `noul` per surviving candidate — "does this file help answer
+    `query`?" — and sort by probability. Only paths + scores are returned.
+    """
+    args = arguments or {}
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return "[jev] jev_find: missing `query`."
+    root = str(args.get("root") or ".")
+    if not os.path.isdir(root):
+        return f"[jev] jev_find: root is not a directory: {root}"
+    pattern = str(args.get("glob") or "*")
+    try:
+        threshold = float(args.get("threshold", 0.6))
+    except (TypeError, ValueError):
+        threshold = 0.6
+    try:
+        max_bytes = int(args.get("max_bytes") or _FIND_MAX_FILE_BYTES)
+    except (TypeError, ValueError):
+        max_bytes = _FIND_MAX_FILE_BYTES
+    try:
+        env_calls = int(os.environ.get("JEV_FIND_MAX_CALLS") or _FIND_MAX_CALLS)
+    except ValueError:
+        env_calls = _FIND_MAX_CALLS
+    try:
+        max_calls = int(args.get("max_calls") or env_calls)
+    except (TypeError, ValueError):
+        max_calls = env_calls
+    max_calls = max(1, min(max_calls, 40))
+    dry_run = bool(args.get("dry_run", False))
+
+    terms = _find_terms(query)
+    if not terms:
+        return "[jev] jev_find: `query` has no usable terms (2+ chars)."
+
+    scanned, candidates = _walk_candidates(
+        root, pattern, terms, max_calls * 3, max_bytes
+    )
+    if not candidates:
+        return (f"[jev] jev_find: no lexical candidates. scanned={scanned} "
+                f"glob={pattern!r} query={query!r}")
+
+    endpoint, _, _ = _resolve_jev_target()
+    provider = _provider_for(endpoint)
+    instructions = (
+        "Does this file contain information that directly helps answer the "
+        f"query: {query!r}?"
+    )
+    criteria = {
+        "true": "definitions, configuration, or prose that answers or materially "
+                "advances the query",
+        "false": "unrelated content, incidental keyword matches, or boilerplate",
+    }
+
+    ranked: list[tuple[float, str, int, int]] = []
+    calls = 0
+    failures = 0
+    for lex, path, text in candidates:
+        noul = -1.0
+        if not dry_run and calls < max_calls:
+            calls += 1
+            try:
+                ans = _jev_post(
+                    state=f"FILE: {path}\n\n{text}",
+                    question="is_relevant",
+                    qtype="noul",
+                    instructions=instructions,
+                    criteria=criteria,
+                )
+                if ans and ans.get("noul") is not None:
+                    noul = float(ans["noul"])
+            except Exception:  # noqa: BLE001 — one bad file must not sink the scan
+                failures += 1
+        ranked.append((noul, path, len(text), lex))
+
+    hits = sorted([r for r in ranked if r[0] >= threshold], key=lambda r: -r[0])
+    misses = [r for r in ranked if r[0] < threshold]
+
+    lines = [
+        f"[jev] jev_find query={query!r} root={root} glob={pattern!r} "
+        f"provider={provider} scanned={scanned} candidates={len(candidates)} "
+        f"jev_calls={calls} failures={failures}"
+        + (" dry_run=true" if dry_run else "")
+    ]
+    if hits:
+        lines.append(f"matches (noul >= {threshold:g}):")
+        for noul, path, size, lex in hits:
+            lines.append(f"  {noul:.2f}  {path}  ({size} chars, {lex} lexical hits)")
+    else:
+        lines.append(f"no file scored >= {threshold:g}")
+    if misses:
+        lines.append("below threshold (do not read without another reason):")
+        for noul, path, size, lex in misses[:8]:
+            shown = "n/a" if noul < 0 else f"{noul:.2f}"
+            lines.append(f"  {shown}  {path}  ({size} chars, {lex} lexical hits)")
+    lines.append(
+        "note: contents were screened server-side and are NOT included above; "
+        "read only the matches (preferably with offset/limit)."
+    )
+    return "\n".join(lines)
+
+
 _TOOLS = {
     "jev_health": {
         "description": (
@@ -481,11 +652,43 @@ _TOOLS = {
             "required": ["text"],
         },
     },
+    "jev_find": {
+        "description": (
+            "Screen candidate files for a query BEFORE reading them. Stage 1: "
+            "lexical prefilter over the filesystem (free). Stage 2: one jev noul "
+            "per candidate asking whether that file helps answer `query`. Returns "
+            "only paths + probabilities, ranked — file contents never enter the "
+            "transcript, so call read_file only on the matches (preferably with "
+            "offset/limit). Costs one jev call per candidate (max_calls / "
+            "JEV_FIND_MAX_CALLS, default 12)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string",
+                          "description": "What you are looking for, in natural language."},
+                "root": {"type": "string",
+                         "description": "Directory to search (default: current dir)."},
+                "glob": {"type": "string",
+                         "description": "Filename glob filter, e.g. '*.py' (default '*')."},
+                "threshold": {"type": "number", "default": 0.6,
+                              "description": "Minimum noul to count as a match."},
+                "max_calls": {"type": "integer",
+                              "description": "Max jev calls (default 12, hard cap 40)."},
+                "max_bytes": {"type": "integer",
+                              "description": "Bytes read per file for screening (default 8000)."},
+                "dry_run": {"type": "boolean", "default": False,
+                            "description": "Lexical ranking only; no jev calls."},
+            },
+            "required": ["query"],
+        },
+    },
 }
 
 
 def _handle_call(name: str, arguments: dict | None) -> dict:
-    fn = {"jev_health": _tool_health, "jev_summarize": _tool_summarize}.get(name)
+    fn = {"jev_health": _tool_health, "jev_summarize": _tool_summarize,
+          "jev_find": _tool_find}.get(name)
     if fn is None:
         return {"content": [{"type": "text", "text": f"[jev] unknown tool: {name}"}],
                 "isError": True}
