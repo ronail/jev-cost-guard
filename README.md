@@ -82,6 +82,19 @@ answers). `jev_summarize` does **not** generate prose — it asks jev a binary `
 question over a result `state` and returns a **success probability**, which is what
 you `budget_tokens`-gate on. jev is a decision model, not a summarizer.
 
+### `jev_find` — screen files before reading them
+`jev_find(query, root, glob, threshold, max_calls)` answers "which file should I
+even read?" without putting file bodies into the transcript. Stage 1 is a free
+lexical prefilter over the tree (skips `.git`, `node_modules`, virtualenvs, build
+dirs, binaries); stage 2 asks jev one `noul` per candidate — *"does this file help
+answer `<query>`?"* — and returns **paths + probabilities only**, ranked. Then read
+just the matches (with `offset`/`limit`).
+
+Cost is one jev call per candidate (`max_calls` / `JEV_FIND_MAX_CALLS`, default 12,
+hard cap 40), so it bills per screened file; `dry_run: true` gives the lexical
+ranking for free. Use it when the question is **semantic** ("where is auth wired
+up?"); for an exact string, `search_files`/grep is free and more precise.
+
 > The repo also ships the **`jev-cost-guard` hook plugin**, which *automatically*
 > gates oversized tool results (`transform_tool_result` → jev `noul` verdict, via the
 > shared `server.py`) so bloat is trimmed without the agent asking. Install it
