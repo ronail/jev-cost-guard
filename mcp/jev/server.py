@@ -51,14 +51,19 @@ Tools:
                   (~21 output tokens). Cheap gating signal, NOT a text digest;
                   jev is a decision model and cannot summarize to tokens.
 Config:
-  JEV_MODEL     model id (default jev-1.13-free).
+  JEV_PROVIDER  typesafe | opencode. Auto: TypeSafe when TYPESAFE_API_KEY is set,
+                else the OpenCode zen relay (default, unchanged).
+  JEV_MODEL     model id (opencode default jev-1.13-free; typesafe default jev-latest).
   JEV_ENDPOINT  override the systemone endpoint.
-  JEV_API_KEY / OPENCODE_ZEN_API_KEY / OPENCODE_API_KEY  bearer key
-                  (else read from the dev profile .env).
-  JEV_DEBUG=1   print relay probe diagnostics (key never printed).
-  JEV_FALLBACK_TO_PAID=1   on jev-1.13-free exhaustion (HTTP 429/403) retry the
-                paid model JEV_FALLBACK_MODEL (default jev-1.13); 0 fails open.
-                No-key (Bearer public) never falls back (no key => no paid).
+  OPENCODE_ZEN_API_KEY / OPENCODE_API_KEY / JEV_API_KEY  OpenCode zen bearer key
+                  (else read from the profile .env).
+  TYPESAFE_API_KEY   TypeSafe direct bearer key (else read from the profile .env).
+                  Its presence selects the TypeSafe provider (api.typesafe.ai,
+                  same System One request/answer shape).
+  JEV_DEBUG=1   print provider/relay probe diagnostics (key never printed).
+  JEV_FALLBACK_TO_PAID=1   (opencode only) on jev-1.13-free exhaustion (HTTP
+                429/403) retry the paid model JEV_FALLBACK_MODEL (default
+                jev-1.13); 0 fails open. No-key (Bearer public) never falls back.
   JEV_FALLBACK_MODEL=jev-1.13   paid model retried on free-tier exhaustion.
 """
 from __future__ import annotations
@@ -73,6 +78,15 @@ _ZEN_BASE = "https://opencode.ai/zen/v1"
 _DEFAULT_JEV_MODEL = "jev-1.13-free"
 _DEFAULT_ENDPOINT = f"{_ZEN_BASE}/systemone"
 
+# TypeSafe's own direct API — the same System One request/answer shape, but a
+# different host, key, and model ids. Selected when TYPESAFE_API_KEY is present
+# (env or profile .env) or JEV_PROVIDER=typesafe; otherwise the OpenCode zen
+# relay above stays the default (unchanged behaviour).
+_TYPESAFE_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
+_DEFAULT_TYPESAFE_MODEL = "jev-latest"
+_OPENCODE_KEY_NAMES = ("OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY", "JEV_API_KEY")
+_TYPESAFE_KEY_NAMES = ("TYPESAFE_API_KEY",)
+
 # Required OpenCode desktop fingerprint for the jev free tier. Without these the
 # relay returns HTTP 403 error code 1010. A real API key is sent as the bearer
 # token (the free model is NOT reachable anonymously -> 403 FreeTierError).
@@ -86,15 +100,25 @@ _SYSTEMONE_HEADERS = {
     "X-Title": "Hermes Agent",
 }
 
+# TypeSafe direct needs only standard JSON headers (no OpenCode UA fingerprint).
+_TYPESAFE_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+}
 
-def _load_profile_env_key(profile: str = "dev") -> str | None:
-    """Read OPENCODE_API_KEY / OPENCODE_ZEN_API_KEY (or JEV_API_KEY) from dev .env.
+
+def _load_profile_env_key(
+    profile: str = "dev",
+    names: tuple[str, ...] = _OPENCODE_KEY_NAMES,
+) -> str | None:
+    """Read a bearer key from the profile `.env` (default: OpenCode keys).
 
     Hermes does NOT inject profile secret env into MCP subprocesses (by design), so
     mcp-jev (a stdio subprocess of the gateway) reads the profile .env directly to
-    reuse the SAME opencode-zen credential the dev profile uses. The file is
-    user-owned (0600); no secret is committed to this repo or to config.yaml.
-    JEV_DEBUG=1 prints presence/path only, never key values.
+    reuse the SAME credential the profile uses. `names` selects which env var names
+    are accepted: OpenCode keys by default, or `TYPESAFE_API_KEY` for the TypeSafe
+    direct provider. The file is user-owned (0600); no secret is committed to this
+    repo or to config.yaml. JEV_DEBUG=1 prints presence/path only, never values.
     """
     candidates: list[str] = []
     explicit = os.environ.get("JEV_PROFILE_ENV")
@@ -118,7 +142,7 @@ def _load_profile_env_key(profile: str = "dev") -> str | None:
                     if not s or s.startswith("#") or "=" not in s:
                         continue
                     k, _, v = s.partition("=")
-                    if k.strip() in ("OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY", "JEV_API_KEY"):
+                    if k.strip() in names:
                         key = v.strip().strip('"').strip("'")
                         break
         except OSError:
@@ -126,18 +150,54 @@ def _load_profile_env_key(profile: str = "dev") -> str | None:
         if key:
             if os.environ.get("JEV_DEBUG"):
                 sys.stderr.write(
-                    f"[jev-debug] found key in {env_path} "
-                    f"(env_override={'yes' if os.environ.get('OPENCODE_API_KEY') else 'no'}); "
+                    f"[jev-debug] found {names[0]} in {env_path}; "
                     f"key set (value redacted)\n"
                 )
             return key
     if os.environ.get("JEV_DEBUG"):
-        sys.stderr.write(f"[jev-debug] no .env key found; tried: {candidates}\n")
+        sys.stderr.write(f"[jev-debug] no {names[0]} found; tried: {candidates}\n")
     return None
 
 
+def _provider_for(endpoint: str) -> str:
+    """'typesafe' for api.typesafe.ai, else 'opencode' (zen relay)."""
+    return "typesafe" if "typesafe.ai" in endpoint else "opencode"
+
+
+def _typesafe_key() -> str | None:
+    """TYPESAFE_API_KEY from the environment, else from the profile .env."""
+    return os.environ.get("TYPESAFE_API_KEY") or _load_profile_env_key(
+        names=_TYPESAFE_KEY_NAMES
+    )
+
+
 def _resolve_jev_target() -> tuple[str, str, str | None]:
-    """Return (endpoint, model, api_key) for the jev System One endpoint."""
+    """Return (endpoint, model, api_key) for the System One call.
+
+    Uses TypeSafe's direct API (`api.typesafe.ai`, `jev-latest`) when
+    `TYPESAFE_API_KEY` is configured or `JEV_PROVIDER=typesafe`; otherwise the
+    OpenCode zen relay (`/zen/v1/systemone`, `jev-1.13-free`) — the default and
+    unchanged path. `JEV_PROVIDER=opencode|zen` forces the relay even when a
+    TypeSafe key is present.
+    """
+    explicit = (os.environ.get("JEV_PROVIDER") or "").strip().lower()
+    if explicit in ("opencode", "zen", "opencode-zen", "zen-relay"):
+        use_typesafe = False
+    elif explicit in ("typesafe", "typesafe-direct", "direct"):
+        use_typesafe = True
+    else:
+        use_typesafe = bool(_typesafe_key())
+    if use_typesafe:
+        override = os.environ.get("JEV_ENDPOINT")
+        # Only honour JEV_ENDPOINT for TypeSafe when it actually points there; a
+        # stale zen URL in a shared manifest must not send a TypeSafe key to zen.
+        endpoint = (
+            override if (override and "typesafe.ai" in override) else _TYPESAFE_ENDPOINT
+        )
+        model = os.environ.get("JEV_MODEL") or _DEFAULT_TYPESAFE_MODEL
+        if model.endswith("-free"):  # e.g. a stale jev-1.13-free from a zen config
+            model = _DEFAULT_TYPESAFE_MODEL
+        return endpoint, model, _typesafe_key()
     endpoint = os.environ.get("JEV_ENDPOINT") or _DEFAULT_ENDPOINT
     model = os.environ.get("JEV_MODEL") or _DEFAULT_JEV_MODEL
     key = (
@@ -185,31 +245,47 @@ def _jev_post(state: str, question: str, qtype: str = "noul",
     """
     endpoint, default_model, key = _resolve_jev_target()
     model = model or default_model
-    # jev-1.13-free is NOT reachable anonymously (the relay returns 403
-    # FreeTierError), but when no key is configured we still attempt the call
-    # with the relay free-tier public bearer so the relay's real auth verdict is
-    # surfaced as a clean `[jev]` message instead of short-circuiting with "no key set".
+    provider = _provider_for(endpoint)
     q: dict = {"type": qtype}
     if instructions:
         q["instructions"] = instructions
     body = {"model": model, "state": state, "questions": {question: q}}
-    headers = dict(_SYSTEMONE_HEADERS)
-    if key:
+    if provider == "typesafe":
+        # TypeSafe direct: a real TYPESAFE_API_KEY is required (no public bearer,
+        # no free tier, no paid-model fallback).
+        if not key:
+            raise RuntimeError(
+                "TYPESAFE_API_KEY is not set but the TypeSafe endpoint was chosen; "
+                "set TYPESAFE_API_KEY (or JEV_PROVIDER=opencode to use the zen relay)."
+            )
+        headers = dict(_TYPESAFE_HEADERS)
         headers["Authorization"] = f"Bearer {key}"
-    elif model.endswith("-free"):
-        # No key configured: relay free-tier public bearer (PR ronail/hermes-agent#1).
-        # Verified live: jev-1.13-free at /systemone -> HTTP 200 with Bearer public.
-        headers["Authorization"] = "Bearer public"
     else:
-        raise RuntimeError(
-            f"no API key set for non-free model {model!r}; set "
-            "OPENCODE_ZEN_API_KEY (or OPENCODE_API_KEY / JEV_API_KEY). "
-            "Only *-free models can run keyless via the relay's public bearer."
-        )
+        # jev-1.13-free is NOT reachable anonymously (the relay returns 403
+        # FreeTierError), but when no key is configured we still attempt the call
+        # with the relay free-tier public bearer so the relay's real auth verdict is
+        # surfaced as a clean `[jev]` message instead of short-circuiting.
+        headers = dict(_SYSTEMONE_HEADERS)
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        elif model.endswith("-free"):
+            # No key configured: relay free-tier public bearer (PR ronail/hermes-agent#1).
+            # Verified live: jev-1.13-free at /systemone -> HTTP 200 with Bearer public.
+            headers["Authorization"] = "Bearer public"
+        else:
+            raise RuntimeError(
+                f"no API key set for non-free model {model!r}; set "
+                "OPENCODE_ZEN_API_KEY (or OPENCODE_API_KEY / JEV_API_KEY). "
+                "Only *-free models can run keyless via the relay's public bearer."
+            )
     req = urllib.request.Request(
         endpoint, data=json.dumps(body).encode(), method="POST", headers=headers
     )
-    dbg = f"[jev-debug] POST {endpoint} model={model} auth={'key' if key else 'public-bearer'} -> "
+    auth_tag = "key" if key else "public-bearer"
+    dbg = (
+        f"[jev-debug] POST {endpoint} provider={provider} model={model} "
+        f"auth={auth_tag} -> "
+    )
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             raw = resp.read()
@@ -221,12 +297,12 @@ def _jev_post(state: str, question: str, qtype: str = "noul",
             sys.stderr.write(dbg + "\n")
             sys.stderr.write(f"[jev-debug] resp-head: {raw[:300]!r}\n")
         resp_body = raw.decode("utf-8", "replace")[:300]
-        auth = "key" if key else "public-bearer"
-        # free-tier exhaustion (quota/IP rate-limit): fall back to the PAID model
-        # only when a real key is present (no key => Bearer public => no paid
-        # route) and the caller opted in. Paid jev bills the opencode account.
+        # OpenCode free-tier exhaustion (quota/IP rate-limit): fall back to the
+        # PAID jev model only on the relay, only with a real key, and only when the
+        # caller opted in. TypeSafe has no free tier, so it never gets here.
         if (
-            _retry_paid
+            provider == "opencode"
+            and _retry_paid
             and os.environ.get("JEV_FALLBACK_TO_PAID", "1") != "0"
             and key
             and default_model.endswith("-free")
@@ -241,8 +317,8 @@ def _jev_post(state: str, question: str, qtype: str = "noul",
             return _jev_post(state, question, qtype, instructions,
                              model=paid, _retry_paid=False)
         raise RuntimeError(
-            f"jev request failed: HTTP {e.code} (auth={auth}). "
-            f"relay response: {resp_body}"
+            f"jev request failed: HTTP {e.code} "
+            f"(provider={provider}, auth={auth_tag}). response: {resp_body}"
         ) from e
     if os.environ.get("JEV_DEBUG"):
         sys.stderr.write(dbg + "\n")
@@ -379,17 +455,19 @@ def _tool_summarize(arguments: dict | None) -> str:
 _TOOLS = {
     "jev_health": {
         "description": (
-            "Probe jev-1.13-free (OpenCode Zen System One decision model) "
-            "reachability via a noul question. Returns 'alive' iff jev answers."
+            "Probe jev (TypeSafe System One decision model) reachability via a "
+            "noul question. Provider auto-selects: TypeSafe direct "
+            "(api.typesafe.ai, jev-latest) when TYPESAFE_API_KEY is set, else "
+            "OpenCode Zen (jev-1.13-free). Returns 'alive' iff jev answers."
         ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
     "jev_summarize": {
         "description": (
-            "Query jev-1.13-free for a calibrated success/failure probability "
-            "(~21 output tokens) over the given text `state`. jev is a DECISION "
-            "model and cannot emit a text digest; this is a cheap gating signal, "
-            "not a summary. `budget_tokens` is advisory (API-compat only)."
+            "Query jev (TypeSafe System One decision model) for a calibrated "
+            "success/failure probability (~21 output tokens) over the given text "
+            "`state`. jev is a DECISION model and cannot emit a text digest; this "
+            "is a cheap gating signal, not a summary. `budget_tokens` is advisory."
         ),
         "inputSchema": {
             "type": "object",
