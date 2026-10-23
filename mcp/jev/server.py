@@ -78,6 +78,8 @@ import fnmatch
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -575,6 +577,51 @@ def _walk_candidates(root: str, pattern: str, terms: list[str],
     return scanned, scored[:max_candidates]
 
 
+def _jgrep_bin() -> str | None:
+    """The `jgrep` binary if installed (semantic grep over the same jev API)."""
+    return os.environ.get("JGREP_BIN") or shutil.which("jgrep")
+
+
+def _screen_with_jgrep(jgrep: str, query: str, paths: list[str],
+                       max_bytes: int) -> list[tuple[float, str]] | None:
+    """Rank `paths` with `jgrep --whole`, which asks one jev question per file.
+
+    Returns [(probability, path)] or None when jgrep cannot run (caller falls
+    back to the in-process ranker). jgrep is the reference implementation of the
+    TypeSafe "Search and retrieval" use case, so we shell out to it rather than
+    maintain a second ranker: it owns batching, the budget cap, the answer cache
+    and the retry policy.
+    """
+    try:
+        budget = float(os.environ.get("JEV_FIND_BUDGET") or "0.05")
+    except ValueError:
+        budget = 0.05
+    cmd = [
+        jgrep, "-o", "-p", "0", "--whole", "--json",
+        f"--max-chars={max_bytes}", f"--budget={budget:g}", query, *paths,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode not in (0, 1):
+        return None
+    rows: list[tuple[float, str]] = []
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        p, path = rec.get("p"), rec.get("file")
+        if path is None or p is None:
+            continue
+        rows.append((float(p), str(path)))
+    return rows
+
+
 def _tool_find(arguments: dict | None) -> str:
     """Rank candidate files by jev relevance WITHOUT putting their content in context.
 
@@ -634,42 +681,60 @@ def _tool_find(arguments: dict | None) -> str:
 
     ranked: list[tuple[float, str, int, int]] = []
     to_screen = candidates[:max_calls]
+    sizes = {p: len(t) for _l, p, t in to_screen}
+    lexes = {p: l for l, p, _t in to_screen}
     requests_made = 0
     failures = 0
+    engine = "local"
     if dry_run:
         for lex, path, text in to_screen:
             ranked.append((-1.0, path, len(text), lex))
     else:
-        # Batched screening: several files per request (docs: ask more than one
-        # question per call). Each question references its own `files.fN.content`.
-        for batch in _batch_by_size(to_screen, _FIND_BATCH_CHARS):
-            requests_made += 1
-            state = {
-                "files": {
-                    f"f{i}": {"path": p, "content": t}
-                    for i, (_, p, t) in enumerate(batch, 1)
+        # Prefer the reference implementation: jgrep already solves "rank files
+        # against a description" (batching, budget cap, answer cache, retries).
+        jgrep = _jgrep_bin()
+        if jgrep:
+            rows = _screen_with_jgrep(
+                jgrep, query, [p for _l, p, _t in to_screen], max_bytes
+            )
+            if rows is not None:
+                engine = "jgrep"
+                ranked = [
+                    (p, path, sizes.get(path, 0), lexes.get(path, 0))
+                    for p, path in rows
+                ]
+                failures = len(to_screen) - len(rows)
+        if engine == "local":
+            # Fallback ranker (no jgrep on PATH): batched screening, several
+            # files per request, each question referencing its own `files.fN`.
+            for batch in _batch_by_size(to_screen, _FIND_BATCH_CHARS):
+                requests_made += 1
+                state = {
+                    "files": {
+                        f"f{i}": {"path": p, "content": t}
+                        for i, (_, p, t) in enumerate(batch, 1)
+                    }
                 }
-            }
-            questions = {
-                f"f{i}": {
-                    "type": "noul",
-                    "instructions": (
-                        f"Would a developer answering {query!r} need to read "
-                        f"`files.f{i}.content`?"
-                    ),
-                    "criteria": criteria,
+                questions = {
+                    f"f{i}": {
+                        "type": "noul",
+                        "instructions": (
+                            f"Would a developer answering {query!r} need to read "
+                            f"`files.f{i}.content`?"
+                        ),
+                        "criteria": criteria,
+                    }
+                    for i, (_, _p, _t) in enumerate(batch, 1)
                 }
-                for i, (_, _p, _t) in enumerate(batch, 1)
-            }
-            try:
-                answers = _systemone_post(state, questions, _retry_paid=True)
-            except Exception:  # noqa: BLE001 — one bad batch must not sink the scan
-                failures += len(batch)
-                answers = {}
-            for i, (lex, path, text) in enumerate(batch, 1):
-                a = answers.get(f"f{i}") or {}
-                noul = float(a["noul"]) if a.get("noul") is not None else -1.0
-                ranked.append((noul, path, len(text), lex))
+                try:
+                    answers = _systemone_post(state, questions, _retry_paid=True)
+                except Exception:  # noqa: BLE001 — one bad batch must not sink the scan
+                    failures += len(batch)
+                    answers = {}
+                for i, (lex, path, text) in enumerate(batch, 1):
+                    a = answers.get(f"f{i}") or {}
+                    noul = float(a["noul"]) if a.get("noul") is not None else -1.0
+                    ranked.append((noul, path, len(text), lex))
 
     # RANK, don't gate. The re-ranking cookbook sorts by the probability itself;
     # a hard cut also hides the 0.3-0.7 band, which the Noul docs define as
@@ -691,7 +756,7 @@ def _tool_find(arguments: dict | None) -> str:
 
     lines = [
         f"[jev] jev_find query={query!r} root={root} glob={pattern!r} "
-        f"provider={provider} scanned={scanned} candidates={len(candidates)} "
+        f"provider={provider} engine={engine} scanned={scanned} candidates={len(candidates)} "
         f"screened={len(to_screen)} requests={requests_made} failures={failures}"
         + (" dry_run=true" if dry_run else "")
     ]
