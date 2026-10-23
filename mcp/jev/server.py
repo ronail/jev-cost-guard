@@ -79,8 +79,33 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
+
+
+def _urlopen_retry(req, timeout: int = 60, attempts: int = 3):
+    """POST with bounded retries on 429/5xx, honoring Retry-After.
+
+    TypeSafe's SDKs retry rate-limited requests by default and follow the
+    `retry-after` header; the stdlib client has to do it explicitly. Exhaustion
+    re-raises the HTTPError so callers keep their normal failure handling.
+    """
+    for attempt in range(attempts):
+        try:
+            return urllib.request.urlopen(req, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            if e.code not in (429, 500, 502, 503, 504) or attempt == attempts - 1:
+                raise
+            delay = 1.0 * (2 ** attempt)
+            raw_ra = e.headers.get("Retry-After") if e.headers else None
+            if raw_ra:
+                try:
+                    delay = min(float(raw_ra), 10.0)
+                except (TypeError, ValueError):
+                    pass
+            time.sleep(delay)
+    raise RuntimeError("unreachable")
 
 _ZEN_BASE = "https://opencode.ai/zen/v1"
 _DEFAULT_JEV_MODEL = "jev-1.13-free"
@@ -91,7 +116,10 @@ _DEFAULT_ENDPOINT = f"{_ZEN_BASE}/systemone"
 # (env or profile .env) or JEV_PROVIDER=typesafe; otherwise the OpenCode zen
 # relay above stays the default (unchanged behaviour).
 _TYPESAFE_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
-_DEFAULT_TYPESAFE_MODEL = "jev-latest"
+# Pinned, not the `jev-latest` alias: TypeSafe's docs say thresholds tuned against
+# one version should send that version's id, and this server ships a default
+# threshold (jev_find). Override with JEV_MODEL (e.g. jev-1.14.0) when you re-tune.
+_DEFAULT_TYPESAFE_MODEL = "jev-1.13.0"
 _OPENCODE_KEY_NAMES = ("OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY", "JEV_API_KEY")
 _TYPESAFE_KEY_NAMES = ("TYPESAFE_API_KEY",)
 
@@ -298,7 +326,7 @@ def _jev_post(state: str, question: str, qtype: str = "noul",
         f"auth={auth_tag} -> "
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with _urlopen_retry(req, timeout=60) as resp:
             raw = resp.read()
             dbg += f"HTTP {resp.status}"
     except urllib.error.HTTPError as e:
