@@ -223,6 +223,13 @@ def _on_transform_tool_result(tool_name: str = "", args: object = None,
     )
     model = verdict.get("model") or "jev"
 
+    # `--verdict` reports the endpoint, not the provider name; derive it so the
+    # JSONL trace says which backend actually answered (typesafe vs zen relay).
+    endpoint = verdict.get("endpoint") or ""
+    provider = verdict.get("provider") or (
+        "typesafe" if "typesafe.ai" in endpoint else "opencode" if endpoint else None
+    )
+
     _write_record({
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "tool": tool_name,
@@ -231,7 +238,7 @@ def _on_transform_tool_result(tool_name: str = "", args: object = None,
         "model": model,
         "ms": elapsed_ms,
         "chars": len(result),
-        "provider": verdict.get("provider"),
+        "provider": provider,
     })
     _dbg(f"annotated tool='{tool_name}': {len(result)} chars -> noul={noul} ({model}) {elapsed_ms}ms")
 
