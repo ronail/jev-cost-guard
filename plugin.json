@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "jev-cost-guard",
+  "version": "0.5.0",
+  "description": "Portable jev context-economy plugin: the jev decision MCP (jev_health, jev_summarize, jev_find, jev_screen) plus the jev-* Hermes skills, installed and enabled as one package.",
+  "author": { "name": "ronail" },
+  "homepage": "https://github.com/ronail/jev-cost-guard",
+  "repository": "https://github.com/ronail/jev-cost-guard",
+  "license": "MIT",
+  "keywords": ["jev", "typesafe", "context", "tokens", "mcp", "skills"]
+}
