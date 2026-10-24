@@ -5,8 +5,7 @@ version: 1.0.0
 author: ronail/jev-cost-guard
 license: MIT
 metadata:
-  hermes:
-    tags: [context, skills, budget, economy]
+  tags: "context,skills,budget,economy"
 ---
 
 # jev-skill-gate

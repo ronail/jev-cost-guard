@@ -5,8 +5,7 @@ version: 1.0.0
 author: ronail/jev-cost-guard
 license: MIT
 metadata:
-  hermes:
-    tags: [delegation, context, economy, profile, cost]
+  tags: "delegation,context,economy,profile,cost"
 ---
 
 # jev-delegate-guard
