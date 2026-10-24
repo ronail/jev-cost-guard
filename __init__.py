@@ -20,8 +20,9 @@ Policy — DEFAULT-DENY, because a verdict REPLACES the result (it is lossy):
     batch runs), and even `terminal` can carry data (`cat`, `curl`).
   * `JEV_SKIP_TOOLS` is an optional second layer that denies an allowlisted tool.
   * Only gates results larger than `JEV_THRESHOLD` tokens (default 1000, ~4 chars/token).
-  * Skips jev's own tools (jev_health/jev_summarize) and any result that is
-    already a `[jev]` verdict (re-entry guard).
+  * Skips every jev tool — native `jev_*` or MCP-namespaced `mcp__jev__*` — and
+    any result that is already a `[jev]` verdict (re-entry guard). Jev tool
+    output is decision data, not noise.
   * FAILS OPEN: any error leaves the original, full result in place.
   * Tunables resolve from the process env first, then the profile `.env`,
     then their defaults (Hermes does not inject `.env` into the plugin host).
@@ -144,8 +145,11 @@ def _jev_verdict(state: str) -> dict | None:
 def _on_transform_tool_result(tool_name: str = "", args: object = None,
                               result: object = None, **_):
     """Replace oversized `result` strings with a jev noul verdict (fail open)."""
-    # Re-entry guard: never gate jev's own tools, and never chain on a verdict.
-    if tool_name in ("jev_health", "jev_summarize", "jev_debug"):
+    # Re-entry guard: never gate jev's own tools — native (`jev_find`,
+    # `jev_screen`, ...) or MCP-namespaced (`mcp__jev__jev_find`, ...). Their
+    # output IS decision data; replacing it would destroy what the jev-* skills
+    # are told to consume.
+    if tool_name.startswith(("jev_", "mcp__jev__")):
         return None
     if not isinstance(result, str):
         return None

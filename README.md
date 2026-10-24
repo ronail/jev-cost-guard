@@ -239,7 +239,7 @@ Plugin tunables (env or `profiles/<profile>/.env`):
 |---|---|---|
 | `JEV_GATE_TOOLS` | *(empty)* | **allowlist — the only tools gated.** Empty ⇒ the hook is inert. Default-deny, because a verdict *replaces* the result: never list data-retrieval tools (`read_file`, `search_files`, `web_search`, `web_extract`, `browser_exec`) — only diagnostic-noise tools (`terminal`, batch runs) |
 | `JEV_THRESHOLD` | `1000` | gate allowlisted results > N tokens (~4N chars) |
-| `JEV_SKIP_TOOLS` | *(empty)* | optional second layer: deny these even when allowlisted |
+| `JEV_SKIP_TOOLS` | *(empty)* | optional second layer: deny these even when allowlisted. Recommended: `jev_find,jev_screen,jev_summarize,skill_view` (jev tool output and skill instructions are data, not noise) |
 | `JEV_DEBUG` | unset | any non-empty value logs per-call diagnostics (e.g. `verbose` — **not** `1`: MCP/config env values must be strings) |
 | `JEV_SERVER_PATH` | `<plugin>/mcp/jev/server.py` | override the delegated server |
 | `JEV_VERDICT_TIMEOUT` | `75` | subprocess timeout in seconds |
@@ -252,8 +252,8 @@ therefore apply to every surface: `TYPESAFE_API_KEY`, `OPENCODE_ZEN_API_KEY`,
 `JEV_FALLBACK_MODEL` (documented in `mcp/jev/env.example`).
 
 **Fail-open** by construction: missing server, non-zero exit, unparseable JSON, or a
-non-`ok` verdict all leave the original result untouched. The hook skips `jev_health`
-/ `jev_summarize` and any already-judged `[jev]` verdict (re-entry guard).
+non-`ok` verdict all leave the original result untouched. The hook skips every jev
+tool (`jev_*`, `mcp__jev__*`) and any already-judged `[jev]` verdict (re-entry guard).
 
 > ⚠️ Enabling alone does nothing: the hook is **default-deny**, so until you set
 > `JEV_GATE_TOOLS` it never fires. A gated result loses its body permanently, so
