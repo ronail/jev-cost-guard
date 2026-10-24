@@ -143,7 +143,7 @@ sizes; the bigger the body, the faster it pays off.
 ## Test results (token-saving evidence)
 
 Measured through the **dev profile** — real `OPENCODE_ZEN_API_KEY` (from
-`profiles/dev/.env`), `Authorization: Bearer <key>`, desktop `User-Agent`, at
+the active profile's `.env`, never committed), `Authorization: Bearer *** desktop `User-Agent`, at
 `https://opencode.ai/zen/v1/systemone`, model `jev-1.13-free` (primary; paid `jev-1.13`
 is a fallback on free exhaustion — see `JEV_FALLBACK_TO_PAID`). Each row is one `jev_summarize` call: a `noul` "is the above
 tool-result successful?" question over a synthetic tool-output body of the stated size.
@@ -169,7 +169,7 @@ Two measured, non-negotiable facts:
 
 Running the skill's shipped reference client
 (`hermes/jev-mcp-model-server/templates/mcp-stdlib-skeleton.py` → `_ask`,
-`Authorization: Bearer <key>` from `profiles/dev/.env`) — i.e. the same `noul` judgment
+`Authorization: Bearer <key>` from the active profile's `.env`) — i.e. the same `noul` judgment
 a dev profile drives through `jev_summarize` — the verdict the agent **persists** stays
 constant as the body grows (the agent keeps just the `noul`, ~7 tokens, vs. re-sending
 the whole body every later call; jev's full billed output is the ~24 in the table above):
@@ -271,15 +271,16 @@ non-`ok` verdict all leave the original result untouched. The hook skips `jev_he
 The `mcp/jev/server.py` stdio server is **dual-frame**: it answers `Content-Length`
 requests (Claude Code, Codex — strict MCP clients) and newline-delimited JSON
 (Hermes' client), so the **same server loads in every harness** with no fork.
-Expose `OPENCODE_ZEN_API_KEY` (from `profiles/dev/.env`, never committed) in the
+Expose `OPENCODE_ZEN_API_KEY` (from the active profile's `.env`, never committed) in the
 harness env, then register `python3 <repo>/mcp/jev/server.py` as an MCP server.
 jev stays the **only** oracle model; Claude Code/Codex are pure clients that call
 `jev_health` / `jev_summarize` like any other tool.
 
+`<repo>` below is your local clone of https://github.com/ronail/jev-cost-guard.
+
 ### Claude Code
 
-Add the server + hook to your Claude Code config (`~/.claude/.claude.json` or the
-legacy `~/.claude/claude_desktop_config.json`) — `mcpServers` and `hooks` go in the
+Add the server + hook to your Claude Code config (`claude_desktop_config.json`) — `mcpServers` and `hooks` go in the
 same file:
 
 ```json
@@ -287,9 +288,9 @@ same file:
   "mcpServers": {
     "jev": {
       "command": "python3",
-      "args": ["/Users/ronail/Projects/jev-cost-guard/mcp/jev/server.py"],
+      "args": ["<repo>/mcp/jev/server.py"],
       "env": {
-        "TYPESAFE_API_KEY": "<your TypeSafe key; from profiles/dev/.env, never commit>"
+        "TYPESAFE_API_KEY": "<your TypeSafe key; from the active profile's .env, never commit>"
       }
     }
   },
@@ -297,7 +298,7 @@ same file:
     "PostToolUse": [
       {
         "command": "python3",
-        "args": ["/Users/ronail/Projects/jev-cost-guard/hooks/claude-codex-jev-verdict.py"],
+        "args": ["<repo>/hooks/claude-codex-jev-verdict.py"],
         "env": {
           "TYPESAFE_API_KEY": "<your TypeSafe key>",
           "JEV_VERDICT_THRESHOLD_CHARS": "4000"
@@ -322,17 +323,17 @@ and paid-jev fallback (`JEV_FALLBACK_TO_PAID` / `JEV_FALLBACK_MODEL`) apply.
 
 ### Codex
 
-Register the server with the verified CLI (writes `~/.codex/config.toml`):
+Register the server with the verified CLI (writes Codex's `config.toml`):
 
 ```sh
-codex mcp add jev -- python3 /Users/ronail/Projects/jev-cost-guard/mcp/jev/server.py \
+codex mcp add jev -- python3 <repo>/mcp/jev/server.py \
   --env TYPESAFE_API_KEY=<your TypeSafe key>
 ```
 
 (Use `--env OPENCODE_ZEN_API_KEY=<key>` instead to run on the Zen relay.)
 
 Codex surfaces jev tools natively. For the **auto-gate**, add a tool-result hook
-in `~/.codex/config.toml` that runs `hooks/claude-codex-jev-verdict.py` with the
+in Codex's `config.toml` that runs `hooks/claude-codex-jev-verdict.py` with the
 same env (check `codex --help` for the exact `hooks` schema on your version). Same
 soft-gate semantics: verdict logged, exits 0.
 
