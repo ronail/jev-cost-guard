@@ -5,10 +5,16 @@ attacks the two real token leak classes visible in `hermes prompt-size`:
 
 1. **The fixed prompt is re-sent on every API call.** Tool schemas + the skills index
    are the fat. → pruned/audited by `jev-skill-gate` / `jev-prompt-budget-audit`.
-2. **Tool output bloats the transcript.** → auto-gated by **jev** (TypeSafe, or the
-   OpenCode Zen free tier) through the
-   `jev-cost-guard` hook plugin (replaces oversized results with a ~7-token `noul`
-   verdict), or judged on-demand via the `mcp/jev` MCP.
+2. **Tool output bloats the transcript.** → auto-annotated by **jev** (TypeSafe, or
+   the OpenCode Zen free tier) through the `jev-cost-guard` hook plugin (appends a
+   one-line `noul` verdict to oversized results — every original byte is kept), or
+   judged on-demand via the `mcp/jev` MCP.
+
+> **Why annotate, not replace.** jev returns typed decisions, never text, so a
+> verdict cannot stand in for the bytes it judged. TypeSafe's *Harness Engineering*
+> use case asks for exactly this — "detect tool-call errors" and "log structured
+> check results and probabilities" — and context managers that work
+> (`jev-compaction`, `lossless-compaction`) keep every kept line verbatim.
 
 > The deterministic head+tail *plugin* (`jev-context-guard`) was removed — it is not
 > a jev-model feature. The model-based decision below is the only trimming lever.
@@ -228,8 +234,8 @@ Install (inactive — the hook does **not** fire until you enable it):
 
     hermes -p dev plugins install ronail/jev-cost-guard --no-deps
 
-Enable (activates the hook — oversized results are REPLACED by the verdict, so the
-original output is dropped from context):
+Enable (activates the hook — oversized results get a one-line jev verdict appended;
+the original output is kept in full):
 
     hermes -p dev plugins enable jev-cost-guard
 
@@ -237,9 +243,10 @@ Plugin tunables (env or `profiles/<profile>/.env`):
 
 | var | default | meaning |
 |---|---|---|
-| `JEV_GATE_TOOLS` | *(empty)* | **allowlist — the only tools gated.** Empty ⇒ the hook is inert. Default-deny, because a verdict *replaces* the result: never list data-retrieval tools (`read_file`, `search_files`, `web_search`, `web_extract`, `browser_exec`) — only diagnostic-noise tools (`terminal`, batch runs) |
-| `JEV_THRESHOLD` | `1000` | gate allowlisted results > N tokens (~4N chars) |
-| `JEV_SKIP_TOOLS` | *(empty)* | optional second layer: deny these even when allowlisted. Recommended: `jev_find,jev_screen,jev_summarize,skill_view` (jev tool output and skill instructions are data, not noise) |
+| `JEV_VERIFY_TOOLS` | *(empty)* | **opt-in list — the only tools annotated.** Empty ⇒ the hook is inert (no jev call, no cost). The legacy name `JEV_GATE_TOOLS` still works. The verdict line is *appended*, so data-retrieval tools are safe to list; the list bounds cost/latency, not data loss. jev's own tools (`jev_*`, `mcp__jev__*`) are always skipped |
+| `JEV_THRESHOLD` | `1000` | annotate listed results > N tokens (~4N chars) |
+| `JEV_SKIP_TOOLS` | *(empty)* | optional second layer: skip these even when listed |
+| `JEV_VERIFY_LOG` | `<profile>/logs/jev-verify.jsonl` | one JSON record per annotated call: `ts`, `tool`, `noul`, `band`, `model`, `ms`, `chars`, `provider` |
 | `JEV_DEBUG` | unset | any non-empty value logs per-call diagnostics (e.g. `verbose` — **not** `1`: MCP/config env values must be strings) |
 | `JEV_SERVER_PATH` | `<plugin>/mcp/jev/server.py` | override the delegated server |
 | `JEV_VERDICT_TIMEOUT` | `75` | subprocess timeout in seconds |
@@ -253,16 +260,17 @@ therefore apply to every surface: `TYPESAFE_API_KEY`, `OPENCODE_ZEN_API_KEY`,
 
 **Fail-open** by construction: missing server, non-zero exit, unparseable JSON, or a
 non-`ok` verdict all leave the original result untouched. The hook skips every jev
-tool (`jev_*`, `mcp__jev__*`) and any already-judged `[jev]` verdict (re-entry guard).
+tool (`jev_*`, `mcp__jev__*`) and any already-annotated `[jev]` result (re-entry guard).
 
-> ⚠️ Enabling alone does nothing: the hook is **default-deny**, so until you set
-> `JEV_GATE_TOOLS` it never fires. A gated result loses its body permanently, so
-> start with a single noise-only tool (e.g. `JEV_GATE_TOOLS=terminal`) and a high
-> `JEV_THRESHOLD`.
+> ⚠️ Enabling alone does nothing: the hook is inert until you set `JEV_VERIFY_TOOLS`
+> (or the legacy `JEV_GATE_TOOLS`). Start with one noisy tool and a high threshold —
+> `JEV_VERIFY_TOOLS=terminal`, `JEV_THRESHOLD=4000` — so jev runs only on results big
+> enough to be worth a call. Nothing is removed, so a wrong verdict costs tokens,
+> not data.
 
-> 💸 Cost: with `TYPESAFE_API_KEY` set the hook bills TypeSafe on **every** gate.
-> Use `JEV_PROVIDER=opencode` (or unset the TypeSafe key) to prefer the free Zen tier,
-> and raise `JEV_THRESHOLD` to gate less often.
+> 💸 Cost: with `TYPESAFE_API_KEY` set the hook bills TypeSafe on **every**
+> annotation. Use `JEV_PROVIDER=opencode` (or unset the TypeSafe key) to prefer the
+> free Zen tier, and raise `JEV_THRESHOLD` to annotate less often.
 
 ---
 
