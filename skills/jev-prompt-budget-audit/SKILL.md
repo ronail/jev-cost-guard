@@ -5,8 +5,7 @@ version: 1.0.0
 author: ronail/jev-cost-guard
 license: MIT
 metadata:
-  hermes:
-    tags: [context, audit, toolsets, budget]
+  tags: "context,audit,toolsets,budget"
 ---
 
 # jev-prompt-budget-audit

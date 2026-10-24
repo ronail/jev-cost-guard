@@ -5,8 +5,7 @@ version: 1.0.0
 author: ronail/jev-cost-guard
 license: MIT
 metadata:
-  hermes:
-    tags: [research, web, economy, digest]
+  tags: "research,web,economy,digest"
 ---
 
 # jev-source-digest
