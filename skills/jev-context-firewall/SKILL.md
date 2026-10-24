@@ -5,8 +5,7 @@ version: 1.0.0
 author: ronail/jev-cost-guard
 license: MIT
 metadata:
-  hermes:
-    tags: [context, delegation, isolation, economy]
+  tags: "context,delegation,isolation,economy"
 ---
 
 # jev-context-firewall

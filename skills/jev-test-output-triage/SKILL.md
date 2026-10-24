@@ -5,8 +5,7 @@ version: 1.0.0
 author: ronail/jev-cost-guard
 license: MIT
 metadata:
-  hermes:
-    tags: [tests, ci, logs, economy]
+  tags: "tests,ci,logs,economy"
 ---
 
 # jev-test-output-triage

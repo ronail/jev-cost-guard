@@ -1,20 +1,21 @@
 # jev-cost-guard
 
-Token-economy guard for agent harnesses — **Hermes-first, harness-agnostic**. It
-attacks the two real token leak classes visible in `hermes prompt-size`:
+Token-economy guard for agent harnesses — **Hermes-first, harness-agnostic** — as a
+single **portable plugin** (skills + MCP, no Python hook). It attacks the two real
+token leak classes visible in `hermes prompt-size`:
 
 1. **The fixed prompt is re-sent on every API call.** Tool schemas + the skills index
    are the fat. → pruned/audited by `jev-skill-gate` / `jev-prompt-budget-audit`.
-2. **Tool output bloats the transcript.** → auto-annotated by **jev** (TypeSafe, or
-   the OpenCode Zen free tier) through the `jev-cost-guard` hook plugin (appends a
-   one-line `noul` verdict to oversized results — every original byte is kept), or
-   judged on-demand via the `mcp/jev` MCP.
+2. **Tool output bloats the transcript.** → judged **on demand** by **jev** (TypeSafe,
+   or the OpenCode Zen free tier) through the `jev` MCP tools — `jev_find` to rank
+   files before you read them, `jev_screen` to admit/quarantine fetched content,
+   `jev_summarize` to compress a result to a single ~7-token `noul` verdict.
 
-> **Why annotate, not replace.** jev returns typed decisions, never text, so a
-> verdict cannot stand in for the bytes it judged. TypeSafe's *Harness Engineering*
-> use case asks for exactly this — "detect tool-call errors" and "log structured
-> check results and probabilities" — and context managers that work
-> (`jev-compaction`, `lossless-compaction`) keep every kept line verbatim.
+> **Why judge, not replace.** jev returns typed decisions, never text, so a verdict
+> cannot stand in for the bytes it judged. TypeSafe's *Harness Engineering* use case
+> asks for exactly this — "detect tool-call errors" and "log structured check results
+> and probabilities" — and context managers that work (`jev-compaction`,
+> `lossless-compaction`) keep every kept line verbatim.
 
 > The deterministic head+tail *plugin* (`jev-context-guard`) was removed — it is not
 > a jev-model feature. The model-based decision below is the only trimming lever.
@@ -23,17 +24,23 @@ attacks the two real token leak classes visible in `hermes prompt-size`:
 
 ## How to use
 
-### Install the skills
+### Install the portable plugin (skills + MCP together)
+
+One package, one install, one enable — skills and the `jev` MCP server register in
+the same step, so there is no second path to keep in sync.
+
 ```bash
-# register the repo as a skill source (discovers every jev-* skill)
-hermes skills tap add ronail/jev-cost-guard
-# install + scan a single skill (fetches sibling references/ too)
-hermes skills install ronail/jev-cost-guard/hermes/jev-context-economy --yes
+hermes -p dev plugins install ronail/jev-cost-guard
+hermes -p dev plugins enable jev-cost-guard
+hermes -p dev mcp list        # -> jev  ... 4 tools  enabled
 ```
-`hermes skills tap add` is verified to register the source and list the `jev-*`
-skills; `hermes skills install <owner/repo/path> --yes` then downloads, runs the
-skills-guard scan, and installs the skill. Add the wanted skills to each profile's
-`skills.auto_load` in `config.yaml` (see `SKILLS.md`).
+
+Nothing else to wire: the plugin ships `plugin.json`, `mcp.json` (which points at
+`${PLUGIN_ROOT}/mcp/jev/server.py`), and the `jev-*` skills under `skills/`. There is
+**no Python hook** and no `plugin.yaml` — the package runs anywhere a portable plugin
+is accepted.
+
+### Skills
 
 | skill | purpose |
 |---|---|
@@ -46,16 +53,13 @@ skills-guard scan, and installs the skill. Add the wanted skills to each profile
 | `jev-source-digest` | triaging web/page bloat |
 | **`jev-mcp-model-server`** | usage guide: how/when to drive jev (TypeSafe or zen) via this MCP |
 
-### Mount the MCP (`mcp/jev`)
-A zero-dependency (pure stdlib, no pip) MCP server exposing `jev_health` +
-`jev_summarize` for **TypeSafe jev** (System One decision model). It talks to
-either TypeSafe's own API or the OpenCode Zen relay directly — never the agent's
-own provider — and uses **only jev models**.
+Add the ones you want to each profile's `skills.auto_load` in `config.yaml`.
 
-```bash
-hermes -p dev mcp add jev --command python3 --args <repo>/mcp/jev/server.py
-hermes -p dev mcp list        # -> jev ... 2 tools  enabled
-```
+### MCP tools
+
+A zero-dependency (pure stdlib, no pip) MCP server exposing four tools. It talks to
+either TypeSafe's own API or the OpenCode Zen relay directly — never the agent's own
+provider — and uses **only jev models**.
 
 **Providers (auto-selected, same request shape).** With `TYPESAFE_API_KEY` set the
 server calls TypeSafe directly — `https://api.typesafe.ai/v1/systemone`, model
@@ -64,12 +68,10 @@ and standard JSON headers; there is no free tier and no paid-fallback retry. Wit
 no TypeSafe key it uses the OpenCode Zen relay: `JEV_MODEL` (default
 `jev-1.13-free`) and `JEV_ENDPOINT` (default `https://opencode.ai/zen/v1/systemone`)
 are optional, the key is **never** on the command line, and the MCP reads
-`OPENCODE_ZEN_API_KEY` from `profiles/<profile>/.env` at runtime (Hermes does not
-inject profile secrets into MCP subprocesses). Force either with
-`JEV_PROVIDER=typesafe|opencode`. No browser/OAuth/device-flow. Set `JEV_DEBUG=1`
-for redacted provider/key logs. Auth modes (real key, the relay free-tier
-`Bearer public` no-key bearer, OpenCode desktop UA fingerprint, and failure modes)
-are documented in `mcp/jev/env.example` and the server docstring.
+`OPENCODE_ZEN_API_KEY` from `profiles/<profile>/.env` at runtime. Force either with
+`JEV_PROVIDER=typesafe|opencode`. No browser/OAuth/device-flow. Auth modes (real key,
+the relay free-tier `Bearer public` no-key bearer, OpenCode desktop UA fingerprint,
+and failure modes) are documented in `mcp/jev/env.example` and the server docstring.
 
 | env | default | note |
 |---|---|---|
@@ -79,7 +81,7 @@ are documented in `mcp/jev/env.example` and the server docstring.
 | `TYPESAFE_API_KEY` | (from `profiles/<profile>/.env`) | TypeSafe direct key — its presence selects `api.typesafe.ai` (`jev-latest`); no free tier, no fallback |
 | `JEV_FALLBACK_TO_PAID` | `1` | `1` (default) on `jev-1.13-free` exhaustion (HTTP 429/403 with a real key) retry the paid model; `0` fails open; no-key never falls back |
 | `JEV_FALLBACK_MODEL` | `jev-1.13` | paid model retried on free exhaustion (same key/endpoint/UA; bills your opencode account) |
-| `JEV_DEBUG` | `0` | optional — `1` = print masked key prefix/suffix |
+| `JEV_DEBUG` | `0` | optional — `verbose` = print masked provider/key diagnostics (**not** `1`: MCP env values must be strings) |
 | `OPENCODE_ZEN_API_KEY` | (from `profiles/<profile>/.env`) | required for the real-key path |
 
 ### `jev_health` / `jev_summarize`
@@ -117,12 +119,6 @@ no `task` it asks only the injection question.
 Thresholds are per call — `inject_threshold` (0.7) and `relevance_threshold` (0.3) — so
 the policy is a number you tune, not one baked into the tool.
 
-
-> The repo also ships the **`jev-cost-guard` hook plugin**, which *automatically*
-> gates oversized tool results (`transform_tool_result` → jev `noul` verdict, via the
-> shared `server.py`) so bloat is trimmed without the agent asking. Install it
-> inactive, tune first, then enable — see [jev-cost-guard plugin](#jev-cost-guard-plugin).
-
 ---
 
 ## Token savings methodology
@@ -149,9 +145,10 @@ sizes; the bigger the body, the faster it pays off.
 ## Test results (token-saving evidence)
 
 Measured through the **dev profile** — real `OPENCODE_ZEN_API_KEY` (from
-the active profile's `.env`, never committed), `Authorization: Bearer *** desktop `User-Agent`, at
-`https://opencode.ai/zen/v1/systemone`, model `jev-1.13-free` (primary; paid `jev-1.13`
-is a fallback on free exhaustion — see `JEV_FALLBACK_TO_PAID`). Each row is one `jev_summarize` call: a `noul` "is the above
+the active profile's `.env`, never committed), `Authorization: Bearer ***`, desktop
+`User-Agent`, at `https://opencode.ai/zen/v1/systemone`, model `jev-1.13-free`
+(primary; paid `jev-1.13` is a fallback on free exhaustion — see
+`JEV_FALLBACK_TO_PAID`). Each row is one `jev_summarize` call: a `noul` "is the above
 tool-result successful?" question over a synthetic tool-output body of the stated size.
 The relay returns its own `usage`, so the full cost of one judgment is visible.
 
@@ -174,11 +171,11 @@ Two measured, non-negotiable facts:
 ### Reproduced via the `jev-mcp-model-server` skill (dev profile)
 
 Running the skill's shipped reference client
-(`hermes/jev-mcp-model-server/templates/mcp-stdlib-skeleton.py` → `_ask`,
-`Authorization: Bearer <key>` from the active profile's `.env`) — i.e. the same `noul` judgment
-a dev profile drives through `jev_summarize` — the verdict the agent **persists** stays
-constant as the body grows (the agent keeps just the `noul`, ~7 tokens, vs. re-sending
-the whole body every later call; jev's full billed output is the ~24 in the table above):
+(`skills/jev-mcp-model-server/templates/mcp-stdlib-skeleton.py` → `_ask`, key from the
+active profile's `.env`) — i.e. the same `noul` judgment a dev profile drives through
+`jev_summarize` — the verdict the agent **persists** stays constant as the body grows
+(the agent keeps just the `noul`, ~7 tokens, vs. re-sending the whole body every later
+call; jev's full billed output is the ~24 in the table above):
 
 | body (chars) | ~body tokens | verdict kept | noul |
 |---|---|---|---|
@@ -202,75 +199,25 @@ faster it pays off. No other model is involved.
 
 | path | what |
 |---|---|
+| `plugin.json` | portable plugin manifest (Agent Plugins 1.0.0) |
+| `mcp.json` | portable MCP declaration — `${PLUGIN_ROOT}/mcp/jev/server.py`, `JEV_MCP=1` |
+| `skills/` | the `jev-*` Hermes skills (auto-discovered, one SKILL.md per dir) |
 | `mcp/jev/server.py` | the one jev implementation: MCP stdio server (dual-frame) + `--verdict` CLI; owns provider selection (TypeSafe / OpenCode Zen) and every fallback |
-| `mcp/jev/mcp.json` | MCP manifest (provider autodetected; no hardcoded model/endpoint) |
 | `mcp/jev/env.example` | env reference: TypeSafe + Zen auth, fallback knobs, failure modes |
-| `hermes/` | the `jev-*` Hermes skills |
-| `SKILLS.md` | index + per-profile wiring |
+| `hooks/claude-codex-jev-verdict.py` | standalone soft-gate hook for Claude Code / Codex (not part of the Hermes plugin) |
 | `docs/token-savings.md` | token-accounting + cap-removal history |
 | `LICENSE` | MIT |
-| `plugin.yaml` | jev-cost-guard plugin manifest (repo-root) |
-| `__init__.py` | jev-cost-guard hook: policy + delegation to `server.py --verdict` (~160 lines, fail-open) |
 
-## jev-cost-guard plugin
+## What changed from the hook build
 
-An **opt-in** hook plugin (named to match the repo) that auto-gates oversized tool
-results through **jev**, replacing the result in-transcript with a ~7-token `noul`
-verdict so the body is not re-sent on later turns.
-
-The hook contains **no jev client of its own** — it shells out to the same
-implementation the MCP uses:
-
-```
-tool result → transform_tool_result → python3 mcp/jev/server.py --verdict → noul verdict
-```
-
-Provider selection (**TypeSafe** when `TYPESAFE_API_KEY` is set, else the OpenCode
-Zen relay) and the entire fallback chain live in `mcp/jev/server.py`, shared with the
-`jev_health` / `jev_summarize` MCP tools and the Claude Code / Codex hooks, so the
-surfaces cannot drift apart. `__init__.py` is ~160 lines of policy + delegation.
-
-Install (inactive — the hook does **not** fire until you enable it):
-
-    hermes -p dev plugins install ronail/jev-cost-guard --no-deps
-
-Enable (activates the hook — oversized results get a one-line jev verdict appended;
-the original output is kept in full):
-
-    hermes -p dev plugins enable jev-cost-guard
-
-Plugin tunables (env or `profiles/<profile>/.env`):
-
-| var | default | meaning |
-|---|---|---|
-| `JEV_VERIFY_TOOLS` | *(empty)* | **opt-in list — the only tools annotated.** Empty ⇒ the hook is inert (no jev call, no cost). The legacy name `JEV_GATE_TOOLS` still works. The verdict line is *appended*, so data-retrieval tools are safe to list; the list bounds cost/latency, not data loss. jev's own tools (`jev_*`, `mcp__jev__*`) are always skipped |
-| `JEV_THRESHOLD` | `1000` | annotate listed results > N tokens (~4N chars) |
-| `JEV_SKIP_TOOLS` | *(empty)* | optional second layer: skip these even when listed |
-| `JEV_VERIFY_LOG` | `<profile>/logs/jev-verify.jsonl` | one JSON record per annotated call: `ts`, `tool`, `noul`, `band`, `model`, `ms`, `chars`, `provider` |
-| `JEV_DEBUG` | unset | any non-empty value logs per-call diagnostics (e.g. `verbose` — **not** `1`: MCP/config env values must be strings) |
-| `JEV_SERVER_PATH` | `<plugin>/mcp/jev/server.py` | override the delegated server |
-| `JEV_VERDICT_TIMEOUT` | `75` | subprocess timeout in seconds |
-
-Tunables resolve from the process environment first, then `profiles/<profile>/.env`,
-then their defaults (Hermes does not inject `.env` into the plugin host).
-Provider/fallback knobs are **not** plugin settings — they belong to the server and
-therefore apply to every surface: `TYPESAFE_API_KEY`, `OPENCODE_ZEN_API_KEY`,
-`JEV_PROVIDER`, `JEV_MODEL`, `JEV_ENDPOINT`, `JEV_FALLBACK_TO_PAID`,
-`JEV_FALLBACK_MODEL` (documented in `mcp/jev/env.example`).
-
-**Fail-open** by construction: missing server, non-zero exit, unparseable JSON, or a
-non-`ok` verdict all leave the original result untouched. The hook skips every jev
-tool (`jev_*`, `mcp__jev__*`) and any already-annotated `[jev]` result (re-entry guard).
-
-> ⚠️ Enabling alone does nothing: the hook is inert until you set `JEV_VERIFY_TOOLS`
-> (or the legacy `JEV_GATE_TOOLS`). Start with one noisy tool and a high threshold —
-> `JEV_VERIFY_TOOLS=terminal`, `JEV_THRESHOLD=4000` — so jev runs only on results big
-> enough to be worth a call. Nothing is removed, so a wrong verdict costs tokens,
-> not data.
-
-> 💸 Cost: with `TYPESAFE_API_KEY` set the hook bills TypeSafe on **every**
-> annotation. Use `JEV_PROVIDER=opencode` (or unset the TypeSafe key) to prefer the
-> free Zen tier, and raise `JEV_THRESHOLD` to annotate less often.
+Earlier builds shipped a native Python plugin (`__init__.py` + `plugin.yaml`) whose
+`transform_tool_result` hook auto-annotated oversized results. That required a Python
+plugin runtime and a second install/enable path, and could not ship as a portable
+package. This release is **portable-only**: skills + MCP, one install, one enable.
+The on-demand tools replace the hook — `jev_find` before you read, `jev_screen` before
+you admit, `jev_summarize` when you want a verdict. The hook code remains in git
+history (`main` through the 0.4.x releases) if you want to run it as a separate
+Python plugin.
 
 ---
 
