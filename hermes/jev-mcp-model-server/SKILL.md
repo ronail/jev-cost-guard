@@ -52,7 +52,7 @@ key/endpoint/UA; `JEV_FALLBACK_TO_PAID` default 1, `=0` fails open, no-key never
 ### 6. Wire + verify
 - Enable: `hermes config set mcp_servers.jev.enabled true` (then `hermes mcp list` shows `jev ✓ enabled`), or `hermes -p <profile> mcp add jev --command python3 --env JEV_MODEL=jev-1.13-free --args <repo>/mcp/jev/server.py`.
 - Verify with a real tools/call on `jev_health` (a `noul` reachability question) — a calibrated probability back means the endpoint is alive.
-- Canonical working implementation: `mcp/jev/server.py` in `ronail/jev-cost-guard`.
+- Canonical working implementation: `mcp/jev/server.py` in https://github.com/ronail/jev-cost-guard (`<repo>` below = your clone).
 - Auth matrix + failure modes: references/opencode-zen-free-bypass.md
 - Starter file: templates/mcp-stdlib-skeleton.py (systemone stub; copy + modify).
 
@@ -64,14 +64,14 @@ Codex — strict MCP clients) **and** newline-delimited JSON (Hermes' bundled cl
 No per-harness fork. Register it identically everywhere:
 
 ```sh
-# put OPENCODE_ZEN_API_KEY (from profiles/dev/.env, never committed) in the
+# put OPENCODE_ZEN_API_KEY (from the active profile's .env, never committed) in the
 # harness env, then point its MCP registry at the server:
 python3 <repo>/mcp/jev/server.py
 ```
 
 - **Hermes**: `hermes -p dev mcp add jev --command python3 --env JEV_MODEL=jev-1.13-free --args <repo>/mcp/jev/server.py` (already `mcp_servers.jev.enabled: true` in the dev profile).
-- **Claude Code**: add `mcpServers.jev` + `hooks.PostToolUse` to `~/.claude/.claude.json` (or the legacy `~/.claude/claude_desktop_config.json`) — see README `## Using jev in Claude Code / Codex` for the full JSON config.
-- **Codex**: `codex mcp add jev -- python3 <repo>/mcp/jev/server.py` (env in `~/.codex/config.toml` or the shell). Codex exposes the jev tools as native tools.
+- **Claude Code**: add `mcpServers.jev` + `hooks.PostToolUse` to your Claude Code config (`claude_desktop_config.json`) — see README [## Using jev in Claude Code / Codex](https://github.com/ronail/jev-cost-guard#using-jev-in-claude-code--codex) for the full JSON config.
+- **Codex**: `codex mcp add jev -- python3 <repo>/mcp/jev/server.py` (env in Codex's `config.toml` or the shell). Codex exposes the jev tools as native tools.
 
 ### Auto-gate (soft, never blocks) in Claude Code / Codex
 
@@ -87,11 +87,11 @@ transcript. The verdict reuses `_jev_ask`, so the same auth + paid-jev fallback
 (`JEV_FALLBACK_TO_PAID` / `JEV_FALLBACK_MODEL`) applies; no-key runs free-tier
 `Bearer public` with no fallback. Register it:
 
-- Claude Code: `~/.claude/.claude.json` → `hooks.PostToolUse = [{"command":"python3 <repo>/hooks/claude-codex-jev-verdict.py", "env":{...}}]` (full JSON in README).
-- Codex: a tool-result hook in `~/.codex/config.toml` running the same script (see `codex --help` for the exact `hooks` schema).
+- Claude Code: your Claude Code config (`claude_desktop_config.json`) → `hooks.PostToolUse = [{"command":"python3 <repo>/hooks/claude-codex-jev-verdict.py", "env":{...}}]` (full JSON in README).
+- Codex: a tool-result hook in Codex's `config.toml` running the same script (see `codex --help` for the exact `hooks` schema).
 
 ## Pitfalls
-- HERMES_HOME is the profile dir under Hermes, not ~/.hermes. Try candidates: HERMES_HOME/.env, HERMES_HOME/profiles/<p>/.env, ~/.hermes/profiles/<p>/.env.
+- The key lives in the active profile's `.env` (never committed); the loader resolves it — see [`mcp/jev/env.example`](https://github.com/ronail/jev-cost-guard/blob/main/mcp/jev/env.example). `HERMES_HOME` is the profile dir under Hermes.
 - Response is JSON (systemone), NOT SSE — do not assume chat-completions stream parsing for jev.
 - No key is NOT "no Authorization": send `Bearer public` for the free tier; only a truly-missing bearer 403s.
 - Relay 403 FreeTierError / code 1010 with all conditions met + key last_status ok is relay state or a missing UA, not a code bug; stop retrying.

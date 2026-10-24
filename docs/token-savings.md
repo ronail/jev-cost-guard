@@ -5,7 +5,7 @@ no provider prompt-caching → full cost on every call). Two levers: a fixed-pro
 shrink via config, and a variable runtime trim via the `jev` model (`mcp/jev`).
 
 ## Status on `dev` (current)
-- 6 `jev-*` skills installed in `~/.hermes/profiles/dev/skills/jev/` (index only,
+- 6 `jev-*` skills installed in `https://github.com/ronail/jev-cost-guard/tree/main/hermes` (index only,
   on-demand — `skills.auto_load` left at its default `[]`).
 - `mcp/jev` MCP server registered in `dev` (`mcp_servers.jev`, `jev_health` +
   `jev_summarize`, model `jev-1.13-free`).
@@ -57,7 +57,7 @@ sessions make more calls).
   `JEV_MCP=0` to disable.
 - jev-1.13-free is an opencode-zen **System One decision model** reached *only* at
   `https://opencode.ai/zen/v1/systemone`. A real `OPENCODE_ZEN_API_KEY`
-  (`Authorization: Bearer <key>` from `profiles/dev/.env`) is preferred; when none
+  (`Authorization: Bearer <key>` from the active profile's `.env`) is preferred; when none
   is set, mcp-jev falls back to the relay free-tier **public bearer**
   (`Authorization: Bearer public`, PR `ronail/hermes-agent#1`) — verified live
   (HTTP 200) — so the no-key case is genuinely supported, not an error. The OpenCode
@@ -71,10 +71,9 @@ sessions make more calls).
   real key w/o the desktop UA -> `403 error code: 1010`; wrong path -> 403 1010.
   Paid retry is bounded (`_retry_paid=False`); a second failure raises so the
   caller fails open. Relay load is one call per trim, at most one paid retry.
-- The dev profile's `OPENCODE_ZEN_API_KEY` is read from `profiles/dev/.env` at
-  runtime (Hermes does not inject profile secrets into MCP subprocesses — the
-  loader tries `HERMES_HOME/.env`, `HERMES_HOME/profiles/<p>/.env`, and
-  `~/.hermes/profiles/<p>/.env`); nothing is committed.
+- The key is read from the active profile's `.env` at runtime (Hermes does not
+  inject profile secrets into MCP subprocesses — see
+  [`mcp/jev/env.example`](https://github.com/ronail/jev-cost-guard/blob/main/mcp/jev/env.example)); nothing is committed.
 
 ## When this differs
 - **Anthropic (cached) profiles** (`default`): prompt caching makes the stable

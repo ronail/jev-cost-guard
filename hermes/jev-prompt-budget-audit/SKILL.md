@@ -17,10 +17,10 @@ skill is the loop that keeps it from creeping back after a good trim.
 ## One-shot procedure
 
 ```bash
-hermes -p <profile> prompt-size --json > /tmp/ps.json
+hermes -p <profile> prompt-size --json > result.json
 python3 - <<'EOF'
 import json
-d=json.load(open("/tmp/ps.json"))
+d=json.load(open("result.json"))
 print("fixed/call (B):", d["system_prompt"]["bytes"]+d["tools"]["json_bytes"])
 print("tools:         ", [(t["toolset"],t["json_bytes"]) for t in sorted(d["toolsets_breakdown"], key=lambda x: -x["json_bytes"])])
 print("skills index:  ", d["skills_index"]["bytes"], "B over", len(d["skills_breakdown"]), "skills")
@@ -38,7 +38,7 @@ EOF
 - skills index >2.5 KB → fall to `jev-skill-gate`.
 
 ## Commit the change
-Edit `~/.hermes/profiles/<profile>/config.yaml` (not via `hermes tools`, which
+Edit `the active profile's `config.yaml`` (not via `hermes tools`, which
 needs a TTY and writes to the active profile), then:
 ```bash
 hermes -p <profile> prompt-size --json | jq '.tools.json_bytes + .system_prompt.bytes'
