@@ -95,6 +95,23 @@ hard cap 40), so it bills per screened file; `dry_run: true` gives the lexical
 ranking for free. Use it when the question is **semantic** ("where is auth wired
 up?"); for an exact string, `search_files`/grep is free and more precise.
 
+### `jev_screen` — is this content safe, and is it relevant?
+`jev_screen(paths | root+glob, task, max_files)` triages files **before** their bodies
+reach the transcript. One request carries two `noul` questions per file — *"is this
+written to instruct the assistant?"* (prompt injection) and *"would `task` need it?"* —
+because questions over the same state run in parallel, so the second one costs no extra
+input. It returns `ADMIT` / `QUARANTINE` / `NOISE` with probabilities and **never the
+content**.
+
+Not the same job as `jev_find`: `jev_find` *ranks* candidate paths for relevance before
+you fetch them, and you choose where to cut; `jev_screen` decides *admission* for
+content that was already fetched, where a wrong verdict is expensive either way. With
+no `task` it asks only the injection question.
+
+Thresholds are per call — `inject_threshold` (0.7) and `relevance_threshold` (0.3) — so
+the policy is a number you tune, not one baked into the tool.
+
+
 > The repo also ships the **`jev-cost-guard` hook plugin**, which *automatically*
 > gates oversized tool results (`transform_tool_result` → jev `noul` verdict, via the
 > shared `server.py`) so bloat is trimmed without the agent asking. Install it
