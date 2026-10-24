@@ -5,8 +5,7 @@ version: 1.0.0
 author: ronail/jev-cost-guard
 license: MIT
 metadata:
-  hermes:
-    tags: [mcp, system-one, auth, token-economy]
+  tags: "mcp,system-one,auth,token-economy"
 category: agent
 triggers:
   - use when the jev model must be invoked through an MCP server rather than the agent's own provider path
