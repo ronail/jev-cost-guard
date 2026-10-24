@@ -1,34 +1,41 @@
-"""jev-cost-guard — opt-in token-cost guard, named after this repo.
+"""jev-cost-guard — opt-in jev annotation for tool results (named after this repo).
 
-Registers a `transform_tool_result` hook that gates oversized tool results
-through **jev** (TypeSafe System One DECISION model) by delegating to the SAME
-implementation the MCP server uses: `mcp/jev/server.py --verdict`.
+Registers a `transform_tool_result` hook that APPENDS one line to oversized tool
+results — a jev (TypeSafe System One DECISION model) `noul` verdict plus model and
+latency — and writes one structured JSONL record. It never replaces the result.
+
+Why annotate and not replace: jev returns typed decisions (noul / choice / score),
+never text, so a verdict cannot stand in for the bytes it judged. TypeSafe's
+"Harness Engineering" use case asks for exactly this shape — *detect tool-call
+errors* and *log structured check results and probabilities* — and the context
+managers that work (`jev-compaction`, `lossless-compaction`) keep every kept line
+verbatim and move the rest behind a pointer. Appending one line keeps the payload
+AND leaves a machine-readable trace.
 
 Why delegate: provider selection (TypeSafe direct when `TYPESAFE_API_KEY` is set,
 else the OpenCode zen relay) and *every* fallback rule live in the server — one
-place. The Hermes hook, the `jev_health`/`jev_summarize` MCP tools, and the
-Claude Code / Codex hooks therefore cannot drift apart.
+place. The Hermes hook, the `jev_*` MCP tools, and the Claude Code / Codex hooks
+therefore cannot drift apart.
 
-Policy — DEFAULT-DENY, because a verdict REPLACES the result (it is lossy):
+Policy — OPT-IN, and non-destructive:
   * Inactive unless the plugin is listed in `plugins.enabled`.
-  * Gates ONLY tools explicitly named in `JEV_GATE_TOOLS` (comma list).
-    Unset/empty => the hook does nothing at all.
-  * Never allowlist data-retrieval tools — the payload IS the answer
-    (read_file, search_files, web_search, web_extract, browser_exec, ...).
-    A verdict there destroys information instead of compressing it. Only
-    diagnostic-noise tools belong on the list (`terminal` build/test logs,
-    batch runs), and even `terminal` can carry data (`cat`, `curl`).
-  * `JEV_SKIP_TOOLS` is an optional second layer that denies an allowlisted tool.
-  * Only gates results larger than `JEV_THRESHOLD` tokens (default 1000, ~4 chars/token).
-  * Skips every jev tool — native `jev_*` or MCP-namespaced `mcp__jev__*` — and
-    any result that is already a `[jev]` verdict (re-entry guard). Jev tool
-    output is decision data, not noise.
+  * Annotates ONLY tools named in `JEV_VERIFY_TOOLS` (comma list; the legacy name
+    `JEV_GATE_TOOLS` still works). Unset/empty => the hook does nothing at all.
+  * Appends one line; every original byte is returned untouched.
+  * Only annotates results larger than `JEV_THRESHOLD` tokens (default 1000, ~4 chars/token).
+  * Writes one JSONL record per call (`JEV_VERIFY_LOG`, default
+    `<profile>/logs/jev-verify.jsonl`): ts, tool, noul, band, model, ms, chars, provider.
+  * `JEV_SKIP_TOOLS` is an optional second layer that skips a listed tool.
+  * Skips every jev tool — native `jev_*` or MCP-namespaced `mcp__jev__*` — and any
+    result already carrying a `[jev]` line (re-entry guard). Jev tool output is
+    decision data, not noise.
   * FAILS OPEN: any error leaves the original, full result in place.
   * Tunables resolve from the process env first, then the profile `.env`,
     then their defaults (Hermes does not inject `.env` into the plugin host).
 
-Tunables: `JEV_GATE_TOOLS` (required to activate), `JEV_THRESHOLD`,
-`JEV_SKIP_TOOLS`, `JEV_DEBUG`, `JEV_SERVER_PATH`, `JEV_VERDICT_TIMEOUT`.
+Tunables: `JEV_VERIFY_TOOLS` (or legacy `JEV_GATE_TOOLS`), `JEV_THRESHOLD`,
+`JEV_SKIP_TOOLS`, `JEV_VERIFY_LOG`, `JEV_DEBUG`, `JEV_SERVER_PATH`,
+`JEV_VERDICT_TIMEOUT`.
 """
 from __future__ import annotations
 
@@ -36,6 +43,11 @@ import json
 import os
 import subprocess
 import sys
+import time
+from datetime import datetime, timezone
+
+# Marker appended to every annotated result; also the re-entry signature.
+_MARK = "[jev] did this call achieve its ask?"
 
 
 def _env_candidates() -> list[str]:
@@ -97,12 +109,37 @@ def _server_path() -> str:
     )
 
 
+def _profile_dir() -> str:
+    hermes_home = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+    prof = os.environ.get("HERMES_PROFILE") or os.environ.get("JEV_PROFILE") or "dev"
+    return os.path.join(hermes_home, "profiles", prof)
+
+
+def _log_path() -> str:
+    """Where structured verdict records go (one JSON object per line)."""
+    explicit = _setting("JEV_VERIFY_LOG")
+    if explicit:
+        return os.path.expanduser(explicit)
+    return os.path.join(_profile_dir(), "logs", "jev-verify.jsonl")
+
+
+def _write_record(record: dict) -> None:
+    """Append one JSONL record. Never raises: the log is observability, not control."""
+    try:
+        path = _log_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as fh:
+            fh.write(json.dumps(record, separators=(",", ":")) + "\n")
+    except Exception as exc:  # noqa: BLE001 — logging must never break the loop
+        _dbg(f"log write failed: {type(exc).__name__}: {exc}")
+
+
 def _jev_verdict(state: str) -> dict | None:
     """Ask jev for a verdict via `mcp/jev/server.py --verdict`.
 
     Single source of truth for provider choice and fallbacks (no duplicated HTTP
     client here). Returns the parsed verdict dict, or None on any failure — the
-    caller fails open and keeps the original tool result.
+    caller fails open and leaves the original tool result untouched.
     """
     server = _server_path()
     if not os.path.exists(server):
@@ -144,7 +181,7 @@ def _jev_verdict(state: str) -> dict | None:
 
 def _on_transform_tool_result(tool_name: str = "", args: object = None,
                               result: object = None, **_):
-    """Replace oversized `result` strings with a jev noul verdict (fail open)."""
+    """Append one jev verdict line to `result`; every original byte is preserved."""
     # Re-entry guard: never gate jev's own tools — native (`jev_find`,
     # `jev_screen`, ...) or MCP-namespaced (`mcp__jev__jev_find`, ...). Their
     # output IS decision data; replacing it would destroy what the jev-* skills
@@ -153,12 +190,13 @@ def _on_transform_tool_result(tool_name: str = "", args: object = None,
         return None
     if not isinstance(result, str):
         return None
-    if result.lstrip().startswith("[jev]"):
+    # Never stack annotations. The marker sits in the appended tail, but an
+    # upstream hook may have prefixed one, so check both ends.
+    if "[jev]" in result[:300] or "[jev]" in result[-400:]:
         return None
 
-    # DEFAULT-DENY. Only tools explicitly named in JEV_GATE_TOOLS are gated;
-    # an empty list means the hook is inert. JEV_SKIP_TOOLS is a second layer.
-    allow = _csv(_setting("JEV_GATE_TOOLS"))
+    # Opt-in. Only tools explicitly named are annotated; empty => inert.
+    allow = _csv(_setting("JEV_VERIFY_TOOLS") or _setting("JEV_GATE_TOOLS"))
     if not allow or tool_name not in allow:
         return None
     if tool_name in set(_csv(_setting("JEV_SKIP_TOOLS"))):
@@ -172,26 +210,38 @@ def _on_transform_tool_result(tool_name: str = "", args: object = None,
     if len(result) < max(1, threshold) * 4:
         return None
 
+    started = time.monotonic()
     verdict = _jev_verdict(result[:20000])
+    elapsed_ms = int((time.monotonic() - started) * 1000)
     if not verdict:
-        _dbg(f"tool={tool_name} not gated (fail open)")
+        _dbg(f"tool={tool_name} not annotated (fail open)")
         return None
 
-    n = verdict.get("noul")
-    interp = verdict.get("interpretation") or (
-        "likely-success" if (n is None or n >= 0.5) else "likely-failure"
+    noul = verdict.get("noul")
+    band = verdict.get("interpretation") or (
+        "likely-success" if (noul is None or noul >= 0.5) else "likely-failure"
     )
     model = verdict.get("model") or "jev"
-    text = (
-        f"[jev] is_successful noul={n} -> {interp} "
-        f"(jev System One decision via {model}; ~7 output tokens, not a digest; "
-        f"gated tool='{tool_name}' result_len={len(result)}; "
-        f"remove '{tool_name}' from JEV_GATE_TOOLS to keep full output)"
+
+    _write_record({
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "tool": tool_name,
+        "noul": noul,
+        "band": band,
+        "model": model,
+        "ms": elapsed_ms,
+        "chars": len(result),
+        "provider": verdict.get("provider"),
+    })
+    _dbg(f"annotated tool='{tool_name}': {len(result)} chars -> noul={noul} ({model}) {elapsed_ms}ms")
+
+    line = (
+        f"\n\n{_MARK} success={noul} ({band}) · {model} · {elapsed_ms}ms"
+        f" · full output above, nothing removed (log: {_log_path()})"
     )
-    _dbg(f"gated tool='{tool_name}': {len(result)} chars -> noul={n} ({model})")
-    return text
+    return result + line
 
 
 def register(ctx):
-    """Hermes plugin entry point: attach the cost-guard hook to the agent loop."""
+    """Hermes plugin entry point: attach the annotation hook to the agent loop."""
     ctx.register_hook("transform_tool_result", _on_transform_tool_result)
