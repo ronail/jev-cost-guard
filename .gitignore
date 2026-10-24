@@ -7,3 +7,5 @@ Resolved at runtime from `$BH_AGENT_WORKSPACE`.
 **/__pycache__/
 __pycache__/
 *.pyc
+
+.DS_Store
