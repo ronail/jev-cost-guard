@@ -1,0 +1,65 @@
+name: jev-cost-guard-skill-router
+version: 0.1.0
+description: "Native pre_llm_call hook: asks TypeSafe Jev which installed skill (if any) fits the current turn and injects one advisory line naming it. Shadow by default. Never rewrites content; the model still chooses to act. Fail-open: never breaks a turn."
+license: MIT
+homepage: https://github.com/ronail/jev-cost-guard
+requires_hermes: ">=0.21"
+manifest_version: 2
+kind: standalone
+requires_env:
+  - TYPESAFE_API_KEY
+provides_hooks:
+  - pre_llm_call
+config_schema:
+  enabled:
+    type: bool
+    default: false
+    description: "Master switch. Nothing is sent anywhere until true."
+  mode:
+    type: str
+    default: shadow
+    description: "shadow = decide + log, inject nothing; live = inject the suggestion line; off = idle."
+  gate:
+    type: float
+    default: 0.30
+    description: "Mean of the gate Nouls (third inverted). Below this, nothing is suggested."
+  fits:
+    type: float
+    default: 0.40
+    description: "The winner's 'does this skill do the specific thing asked' Noul. Below this, no suggestion."
+  shortlist:
+    type: int
+    default: 3
+    description: "Candidates whose SKILL.md excerpt is sent in the narrow request."
+  chunk:
+    type: int
+    default: 240
+    description: "Skills per TypeSafe request. The API caps a question at 255 options."
+  excerpt:
+    type: int
+    default: 700
+    description: "First N chars of SKILL.md sent for shortlisted candidates only."
+  suggest_chars:
+    type: int
+    default: 4000
+    description: "Requests longer than this are left alone."
+  timeout:
+    type: float
+    default: 10.0
+    description: "TypeSafe wall-clock budget for one routing decision."
+  model:
+    type: str
+    default: ""
+    description: "Empty = let mcp/jev/server._resolve_jev_target pick jev-1.13.0 (TypeSafe) or jev-1.13-free (keyless zen)."
+  roster_dir:
+    type: str
+    default: ""
+    description: "Comma-separated skill dirs to scan. Empty = scan <hermes_home>/skills and profiles/*/skills."
+  cache_path:
+    type: str
+    default: ""
+    description: "Cache file (request hash -> (skill, fits)). Empty = no cache."
+  log_path:
+    type: str
+    default: ""
+    description: "One line per routed turn. Empty = no log."
