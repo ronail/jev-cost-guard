@@ -585,15 +585,37 @@ def _jgrep_bin() -> str | None:
 def _jgrep_env() -> dict:
     """Environment for the jgrep subprocess.
 
-    jgrep reads the key from its own env (or ~/.config/jev/…), which the MCP
-    child may not have. We already resolve the key for our own requests, so pass
-    the same one through — never on the command line, where it would show in ps.
+    jgrep reads its own key/endpoint/model from env (or ~/.config/jev/…), which
+    the MCP child may not have — and it does NOT run our `_resolve_jev_target`,
+    so a stale `JEV_MODEL=jev-1.13-free` or `JEV_PROVIDER=opencode` inherited
+    from the parent env can make it POST a zen-only model at the TypeSafe
+    endpoint (`400 Model jev-1.13-free does not exist`).
+
+    Mirror the in-process resolution here so jgrep uses the SAME provider /
+    model / endpoint the server chose for itself. The key is passed through
+    too — never on the command line, where it would show in ps.
     """
     env = dict(os.environ)
-    if not env.get("TYPESAFE_API_KEY"):
-        key = _typesafe_key()
+    endpoint, model, key = _resolve_jev_target()
+    provider = _provider_for(endpoint)
+    if provider == "typesafe":
+        # TypeSafe direct needs a real key and a typesafe-valid model; a
+        # `-free` model is zen-only and must never reach api.typesafe.ai.
         if key:
             env["TYPESAFE_API_KEY"] = key
+        env["JEV_PROVIDER"] = "typesafe"
+        env["JEV_MODEL"] = model
+        env["JEV_ENDPOINT"] = endpoint
+        if model.endswith("-free"):
+            env["JEV_MODEL"] = _DEFAULT_TYPESAFE_MODEL
+        env.pop("OPENCODE_ZEN_API_KEY", None)
+    else:
+        # OpenCode zen relay: the key/bearer is opencode-scoped.
+        env.pop("TYPESAFE_API_KEY", None)
+        env["JEV_PROVIDER"] = "opencode"
+        env["JEV_MODEL"] = model
+        env["JEV_ENDPOINT"] = endpoint
+    env.pop("JEV_DEBUG", None)  # jgrep has its own debug toggle; avoid dup logging
     return env
 
 
