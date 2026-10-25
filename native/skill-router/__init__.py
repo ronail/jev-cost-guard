@@ -4,20 +4,23 @@ Mirrors the `typesafe-skill-router` pattern, implemented INSIDE this repo so
 there is no third-party plugin dependency:
 
 * `pre_llm_call` fires once per fresh user turn.
-* It asks TypeSafe Jev (decision model `jev-1.13.0`, pinned for reproducibility)
-  which installed skill, if any, fits the turn, using ONLY the live skill
-  roster (name + first 200 chars of `description`, chunked; shortlisted
-  candidates also send the first `excerpt` chars of their `SKILL.md`).
-  Never sent: conversation history, files, memory, or credentials.
+* It asks Jev (`jev-1.13.0` on TypeSafe, `jev-1.13-free` on the zen relay — the
+  provider/model is resolved per call by `mcp/jev/server._resolve_jev_target`,
+  so nothing is pinned here and keyless `Bearer public` zen works) which
+  installed skill, if any, fits the turn, using ONLY the live skill roster
+  (name + first 200 chars of `description`, chunked; shortlisted candidates also
+  send the first `excerpt` chars of their `SKILL.md`). Never sent: conversation
+  history, files, memory, or credentials.
 * If a skill fits (gate + fits thresholds, enforced in code), in `live` mode it
   injects one advisory line naming the skill. In `shadow` mode it logs the
   decision and injects nothing.
 * The hook only *suggests*; the model still chooses to load a skill. Any error
   is logged as one line and returns `None` — a routing failure can never break a
   turn (fail-open).
-* Transport is reused from this repo's `mcp/jev/server.py` when the hook is
-  loaded with the repo root on `sys.path`; otherwise a small local TypeSafe
-  fallback (same payload shape) is used so the hook also runs standalone.
+* Transport is NOT duplicated: the hook locates this repo's `mcp/jev/server.py`
+  (repo root, `JEV_SERVER_PATH`, or the installed `jev-cost-guard` plugin) and
+  calls its `_systemone_post`; if it cannot be located the hook stays inert
+  (fail-open) instead of shipping a second HTTP client.
 
 This is a native (Python) plugin entry — a portable `plugin.json` cannot carry
 `pre_llm_call`, which is exactly the seam that bridges a natural prompt to a jev
@@ -26,36 +29,53 @@ tool call.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import logging
 import os
-import sys
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any, Optional
 
 log = logging.getLogger("jev_skill_router")
 
-# --- try to reuse this repo's transport (mcp/jev/server.py) -------------------
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]  # native/skill-router/ -> repo root
-if str(_REPOSITORY_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPOSITORY_ROOT))
-try:
-    from mcp.jev.server import (  # type: ignore
-        _systemone_post,
-        _urlopen_retry,
-        _typesafe_key,
-        _resolve_jev_target,
-    )
-    _HAVE_LOCAL_SERVER = True
-except Exception:  # standalone / host process without the portable package
-    _HAVE_LOCAL_SERVER = False
-    _systemone_post = None  # type: ignore[assignment]
-    _urlopen_retry = None  # type: ignore[assignment]
 
-_TYPESAFE_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
+# --- reuse this repo's transport (mcp/jev/server.py), never duplicate it ------
+def _load_server() -> Any:
+    """Path-load `mcp/jev/server.py` so auth/provider/model resolution is shared.
+
+    Order: repo root (`native/skill-router` -> `../..`), `JEV_SERVER_PATH`, then
+    any installed plugin that ships the portable package. Returns `None` when it
+    cannot be found, in which case the hook stays inert (fail-open) instead of
+    re-implementing HTTP here.
+    """
+    candidates: list[Path] = [
+        Path(__file__).resolve().parents[2] / "mcp" / "jev" / "server.py",
+    ]
+    env_path = os.environ.get("JEV_SERVER_PATH", "").strip()
+    if env_path:
+        candidates.append(Path(env_path))
+    home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+    candidates += sorted(home.glob("plugins/*/mcp/jev/server.py"))
+    candidates += sorted(home.glob("plugins/*/*/mcp/jev/server.py"))
+    for cand in candidates:
+        if not cand.is_file():
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location("jev_mcp_server", cand)
+            if spec is None or spec.loader is None:
+                continue
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            if hasattr(mod, "_systemone_post"):
+                return mod
+        except Exception as exc:  # pragma: no cover - defensive
+            log.debug("jev server load failed at %s: %s", cand, exc)
+    return None
+
+
+_SERVER = _load_server()  # may be None -> hook stays inert
+
 GATE_QUESTIONS = (
     ("gate_material", "does this turn act on the user's own material or need a tool to act on it?",
      {"true": "yes, the turn needs a skill/tool to act", "false": "no, it is chatter or a question"}),
@@ -100,7 +120,8 @@ class Router:
     excerpt = property(lambda self: int(self._cfg("excerpt", 700)))
     suggest_chars = property(lambda self: int(self._cfg("suggest_chars", 4000)))
     timeout = property(lambda self: float(self._cfg("timeout", 10.0)))
-    model = property(lambda self: str(self._cfg("model", "jev-1.13.0")))
+    # "" => let mcp/jev/server._resolve_jev_target pick the model per key
+    model = property(lambda self: str(self._cfg("model", "")))
 
     def _roster_dirs(self) -> list[Path]:
         cfg = str(self._cfg("roster_dir", "") or "").strip()
@@ -165,9 +186,11 @@ class Router:
 
     # -- jev transport ---------------------------------------------------------
     def _post(self, state: str, questions: dict) -> dict:
-        if _HAVE_LOCAL_SERVER and _systemone_post is not None:  # reuse this repo
-            return _systemone_post(state, questions, model=self.model)  # type: ignore[union-attr]
-        return _post_type_safe_local(state, questions, model=self.model, timeout=self.timeout)
+        if _SERVER is None:
+            raise RuntimeError("mcp/jev/server.py not located; install jev-cost-guard")
+        # model=None => _resolve_jev_target picks TypeSafe jev-1.13.0 or keyless
+        # zen jev-1.13-free; no authentication/client logic is duplicated here.
+        return _SERVER._systemone_post(state, questions)
 
     # -- decision --------------------------------------------------------------
     def decide(self, user_message: str) -> Optional[tuple[str, float]]:
@@ -263,43 +286,6 @@ class Router:
                 f"The model still chooses to load it.")
 
 
-# -- local TypeSafe fallback (same payload shape as mcp/jev/server._systemone_post) --
-def _post_type_safe_local(state: str, questions: dict, model: str, timeout: float) -> dict:
-    key = os.environ.get("TYPESAFE_API_KEY", "")
-    if not key:
-        raise RuntimeError("TYPESAFE_API_KEY is not set")
-    body = {"model": model, "state": state, "questions": questions}
-    req = urllib.request.Request(
-        _TYPESAFE_ENDPOINT,
-        data=json.dumps(body).encode("utf-8"),
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-                 "User-Agent": "jev-cost-guard-skill-router/0.1.0"},
-        method="POST",
-    )
-    return _retry_post(req, timeout=timeout)
-
-
-def _retry_post(req: urllib.request.Request, timeout: float, attempts: int = 3) -> dict:
-    if _HAVE_LOCAL_SERVER and _urlopen_retry is not None:  # reuse repo retry policy
-        try:
-            resp = _urlopen_retry(req, timeout=int(timeout), attempts=attempts)  # type: ignore[union-attr]
-            return json.loads(resp.read().decode("utf-8")).get("answers", {})  # type: ignore[union-attr]
-        except Exception:
-            pass
-    for attempt in range(attempts):
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                ans = json.loads(resp.read().decode("utf-8"))
-            if "answers" in ans:
-                return ans["answers"]
-            return ans.get("answers", {})
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError) as exc:
-            if attempt + 1 >= attempts:
-                raise
-            time.sleep(0.2 * (2 ** attempt))
-    return {}
-
-
 # -- small YAML-ish front-matter reader (no pyyaml dependency) ----------------
 def _fm(text: str, key: str) -> str:
     if not text or not text.startswith("---"):
@@ -358,7 +344,7 @@ def _command(raw: str = "", *, session_id: str = "") -> str:
     head = parts[:1]
     if not head or head == ["status"]:
         return (f"mode={r.mode} gate={r.gate} fits={r.fits} enabled={'yes' if r.enabled else 'no'} "
-                f"roster={len(r.roster())} skills local_server={_HAVE_LOCAL_SERVER}")
+                f"roster={len(r.roster())} skills server={'ok' if _SERVER is not None else 'missing'}")
     if head == ["on"]:
         return "set enabled=true mode=live in plugins.entries.jev-cost-guard-skill-router.settings"
     if head == ["off"]:

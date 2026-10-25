@@ -319,12 +319,13 @@ breaks one.
 1. It registers a host `pre_llm_call` hook. (A portable `plugin.json` cannot do
    this — `provides_hooks: [pre_llm_call]` requires a native `__init__.py` +
    `plugin.yaml`.)
-2. On each fresh user turn it asks **jev** (TypeSafe, model pinned to
-   `jev-1.13.0`; OpenCode Zen relay when `TYPESAFE_API_KEY` is absent) which
-   installed skill, if any, fits — sending **only** the live skill roster
-   (name + first 200 chars of each `description`, chunked at 240; shortlisted
-   candidates also send the first 700 chars of their `SKILL.md`). No history,
-   files, or credentials are ever sent.
+2. On each fresh user turn it asks **jev** via this repo's
+   `mcp/jev/server._systemone_post` (the provider/model is resolved once:
+   `jev-1.13.0` on TypeSafe, keyless `jev-1.13-free` on the Zen relay — nothing
+   is pinned in the hook) which installed skill, if any, fits — sending **only**
+   the live skill roster (name + first 200 chars of each `description`, chunked
+   at 240; shortlisted candidates also send the first 700 chars of their
+   `SKILL.md`). No history, files, or credentials are ever sent.
 3. If a skill fits the `gate` + `fits` thresholds (enforced in code), it logs
    the decision; in `live` mode it injects **one advisory line** naming the
    skill. The model still chooses to load it.
@@ -338,8 +339,11 @@ hermes -p dev plugins enable jev-cost-guard-skill-router
 hermes -p dev plugins config jev-cost-guard-skill-router set enabled=true mode=live
 ```
 
-Requires `TYPESAFE_API_KEY` (TypeSafe Jev) or `OPENCODE_ZEN_API_KEY` (Zen relay)
-in the profile env. With neither set, the hook stays inert (fail-open).
+No key is required for the Zen free tier (`Bearer public`, `jev-1.13-free`);
+`TYPESAFE_API_KEY` in the profile env switches to TypeSafe (`jev-1.13.0`). The
+hook reuses `mcp/jev/server.py` located at the repo root, `JEV_SERVER_PATH`, or
+an installed `jev-cost-guard` plugin; if none is found it stays inert
+(fail-open) — it never ships a second HTTP client.
 
 ### Config
 
@@ -354,7 +358,7 @@ in the profile env. With neither set, the hook stays inert (fail-open).
 | `excerpt` | `700` | first N chars of `SKILL.md` for shortlisted candidates |
 | `suggest_chars` | `4000` | turns longer than this are left alone |
 | `timeout` | `10.0` | TypeSafe wall-clock budget for one routing decision |
-| `model` | `jev-1.13.0` | pinned for reproducibility (jev is a decision model, never a summarizer) |
+| `model` | _auto_ | empty = `mcp/jev/server._resolve_jev_target` picks `jev-1.13.0` (TypeSafe) or `jev-1.13-free` (keyless zen); jev is a decision model, never a summarizer |
 | `roster_dir` | _auto_ | comma-separated skill dirs; empty = scan `<hermes_home>/skills`, `profiles/*/skills`, `plugins/*/skills` |
 | `cache_path` | _off_ | JSON cache keyed by `mode|model|roster|turn` to skip repeat API calls |
 | `log_path` | _off_ | one line per routed turn |
