@@ -51,7 +51,6 @@ is accepted.
 | `jev-delegate-guard` | pick the leanest child profile; break-even gate |
 | `jev-test-output-triage` | triaging test/log bloat |
 | `jev-source-digest` | triaging web/page bloat |
-| **`jev-pr-ui-check`** | answer "did the latest merged PR contain UI changes?" with one jev call; returns a verdict + per-file probability, never the diff contents |
 | **`jev-mcp-model-server`** | usage guide: how/when to drive jev (TypeSafe or zen) via this MCP |
 
 Add the ones you want to each profile's `skills.auto_load` in `config.yaml`.
