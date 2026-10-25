@@ -1102,18 +1102,41 @@ _TOOLS = {
 }
 
 
+def _log_mcp_call(name: str, status: str) -> None:
+    """Opt-in JSONL record of REAL MCP tool invocations.
+
+    The skill-routing hook path-loads this module and calls ``_systemone_post``
+    directly, never ``_handle_call`` — so hook traffic is NOT counted here. This
+    is the measurement seam: set ``JEV_CALL_LOG=<path>`` to count only calls the
+    model actually made to ``jev_health|jev_summarize|jev_find|jev_screen``.
+    """
+    path = os.environ.get("JEV_CALL_LOG", "").strip()
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": time.time(),
+                                 "iso": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                 "tool": name, "status": status}) + "\n")
+    except OSError:
+        pass
+
+
 def _handle_call(name: str, arguments: dict | None) -> dict:
     fn = {"jev_health": _tool_health, "jev_summarize": _tool_summarize,
           "jev_find": _tool_find, "jev_screen": _tool_screen}.get(name)
     if fn is None:
+        _log_mcp_call(name, "unknown")
         return {"content": [{"type": "text", "text": f"[jev] unknown tool: {name}"}],
                 "isError": True}
     try:
         text = fn(arguments)
     except Exception as e:  # noqa: BLE001
+        _log_mcp_call(name, "error")
         return {"content": [{"type": "text",
                              "text": f"[jev] tool {name} crashed: {type(e).__name__}: {e}"}],
                 "isError": True}
+    _log_mcp_call(name, "ok")
     return {"content": [{"type": "text", "text": text}]}
 
 

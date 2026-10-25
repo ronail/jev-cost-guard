@@ -375,3 +375,29 @@ hermes -p dev plugins call jev-skill-router status
 > The portable plugin (`plugin.json` + `skills/` + `mcp/`) is the **default** path
 > and is unaffected by this native entry — keep both enabled only if you want
 > prompt-time auto-routing in addition to the on-demand MCP tools.
+
+### Measuring whether the hook changes model behavior
+
+The hook calls jev on every enabled turn, so "jev is being used" is not a useful
+signal. The question is whether the advisory line makes the model call the
+`jev_*` **MCP tools** more often. Two opt-in logs answer it:
+
+- `settings.log_path` — one line per turn: `skill=<name> fits=<p> mode=<shadow|live>`
+  or `no skill matched (mode=...)`.
+- `JEV_CALL_LOG=<path>` (env on the `mcp_servers.jev` process) — one JSONL line per
+  **real** MCP tool call (`jev_health|jev_summarize|jev_find|jev_screen`). The
+  hook's own transport (`_systemone_post`) never passes through `_handle_call`,
+  so hook traffic is excluded — the log is a clean "the model called a jev tool"
+  signal.
+
+Run an A/B: `mode=shadow` for N turns (control, injects nothing) then `mode=live`
+for comparable N turns (treatment), then join the logs:
+
+```sh
+python native/skill-router/measure_hook_lift.py \
+  --hook <log_path> --mcp <JEV_CALL_LOG path> --window 180
+```
+
+It prints `hit_rate` per mode (share of turns with a jev MCP call inside the
+window) and the `LIFT` (live − shadow). The sharpest comparison is skill-matching
+turns only (`suggest>0`) on comparable work.
