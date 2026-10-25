@@ -620,14 +620,21 @@ def _jgrep_env() -> dict:
 
 
 def _screen_with_jgrep(jgrep: str, query: str, paths: list[str],
-                       max_bytes: int) -> list[tuple[float, str]] | None:
-    """Rank `paths` with `jgrep --whole`, which asks one jev question per file.
+                       max_bytes: int) -> dict | None:
+    """Run `jgrep --whole` over `paths` and return a structured result.
 
-    Returns [(probability, path)] or None when jgrep cannot run (caller falls
-    back to the in-process ranker). jgrep is the reference implementation of the
-    TypeSafe "Search and retrieval" use case, so we shell out to it rather than
-    maintain a second ranker: it owns batching, the budget cap, the answer cache
-    and the retry policy.
+    jgrep asks one jev question per file (its own batching/budget/cache/retry).
+    Because jgrep is a separate process it does not run `_resolve_jev_target`, so
+    the env from `_jgrep_env()` carries the authoritative provider/model/endpoint
+    (and the key). Verbose is forced so jgrep emits the HTTP status lines we parse.
+
+    Returns None only when jgrep could not be spawned at all (caller falls back
+    to the in-process ranker). Otherwise:
+      rows      -> [(probability, path)] as scored
+      failures  -> count of HTTP 4xx/5xx jgrep logged (real API failures)
+      model     -> the model string actually sent
+      provider  -> 'typesafe' | 'opencode'
+      error     -> head of the first failure line (or None)
     """
     try:
         budget = float(os.environ.get("JEV_FIND_BUDGET") or "0.05")
@@ -637,14 +644,22 @@ def _screen_with_jgrep(jgrep: str, query: str, paths: list[str],
         jgrep, "-o", "-p", "0", "--whole", "--json",
         f"--max-chars={max_bytes}", f"--budget={budget:g}", query, *paths,
     ]
+    jenv = _jgrep_env()
+    jenv["JEV_DEBUG"] = "verbose"   # make jgrep emit HTTP status lines to stderr
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180,
-                              env=_jgrep_env())
+                              env=jenv)
     except (OSError, subprocess.SubprocessError):
         return None
-    if proc.returncode not in (0, 1):
-        return None
     rows: list[tuple[float, str]] = []
+    http_fail = 0
+    error: str | None = None
+    for line in proc.stderr.splitlines():
+        m = re.search(r"HTTP (\d{3})", line)
+        if m and int(m.group(1)) >= 400:
+            http_fail += 1
+            if error is None:
+                error = line.strip()[:200]
     for line in proc.stdout.splitlines():
         line = line.strip()
         if not line.startswith("{"):
@@ -657,7 +672,13 @@ def _screen_with_jgrep(jgrep: str, query: str, paths: list[str],
         if path is None or p is None:
             continue
         rows.append((float(p), str(path)))
-    return rows
+    return {
+        "rows": rows,
+        "failures": http_fail,
+        "model": jenv.get("JEV_MODEL", ""),
+        "provider": _provider_for(jenv.get("JEV_ENDPOINT", "")),
+        "error": error,
+    }
 
 
 def _tool_find(arguments: dict | None) -> str:
@@ -724,6 +745,7 @@ def _tool_find(arguments: dict | None) -> str:
     requests_made = 0
     failures = 0
     engine = "local"
+    jgrep_note: str | None = None
     if dry_run:
         for lex, path, text in to_screen:
             ranked.append((-1.0, path, len(text), lex))
@@ -732,16 +754,21 @@ def _tool_find(arguments: dict | None) -> str:
         # against a description" (batching, budget cap, answer cache, retries).
         jgrep = _jgrep_bin()
         if jgrep:
-            rows = _screen_with_jgrep(
+            run = _screen_with_jgrep(
                 jgrep, query, [p for _l, p, _t in to_screen], max_bytes
             )
-            if rows is not None:
+            if run is not None:
                 engine = "jgrep"
-                ranked = [
-                    (p, path, sizes.get(path, 0), lexes.get(path, 0))
-                    for p, path in rows
-                ]
-                failures = len(to_screen) - len(rows)
+                scored = {path: p for p, path in run["rows"]}
+                for lex, path, text in to_screen:
+                    ranked.append((scored.get(path, -1.0), path, len(text), lex))
+                # jgrep makes its own (batched) request; count one jev call
+                # whenever any judgment came back, so requests>0 is observable.
+                if run["rows"]:
+                    requests_made += 1
+                failures += run["failures"]
+                if run["error"]:
+                    jgrep_note = f"{run['model']}: {run['error']}"
         if engine == "local":
             # Fallback ranker (no jgrep on PATH): batched screening, several
             # files per request, each question referencing its own `files.fN`.
@@ -797,6 +824,7 @@ def _tool_find(arguments: dict | None) -> str:
         f"provider={provider} engine={engine} scanned={scanned} candidates={len(candidates)} "
         f"screened={len(to_screen)} requests={requests_made} failures={failures}"
         + (" dry_run=true" if dry_run else "")
+        + (f" jev-call note: {jgrep_note[:280]}" if jgrep_note else "")
     ]
     if kept:
         lines.append("ranked by relevance (highest first; bands 0.7 / 0.3):")
