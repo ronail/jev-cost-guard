@@ -49,8 +49,8 @@ config_schema:
     description: "TypeSafe wall-clock budget for one routing decision."
   model:
     type: str
-    default: jev-1.13.0
-    description: "Pinned for reproducibility (jev-latest drifts)."
+    default: ""
+    description: "Empty = let mcp/jev/server._resolve_jev_target pick jev-1.13.0 (TypeSafe) or jev-1.13-free (keyless zen)."
   roster_dir:
     type: str
     default: ""

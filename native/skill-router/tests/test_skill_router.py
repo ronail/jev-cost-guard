@@ -33,7 +33,7 @@ def _router(skills_dir, mode="live", enabled=True, gate=0.30, fits=0.40,
             cache_path=None, post=None, **kw):
     settings = dict(mode=mode, enabled=enabled, gate=gate, fits=fits,
                     roster_dir=str(skills_dir), chunk=240, excerpt=700,
-                    suggest_chars=4000, timeout=10.0, model="jev-1.13.0",
+                    suggest_chars=4000, timeout=10.0, model="",
                     cache_path=cache_path or "")
     settings.update(kw)
     r = Router(ctx=None, settings=settings)
