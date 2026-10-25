@@ -672,6 +672,11 @@ def _screen_with_jgrep(jgrep: str, query: str, paths: list[str],
         if path is None or p is None:
             continue
         rows.append((float(p), str(path)))
+    if os.environ.get("JEV_DEBUG") and proc.stderr:
+        # jgrep logs HTTP status lines to stderr (`... HTTP 400/429/402 ...`).
+        # Re-surface them on the server's stderr so a delegated call that 4xx/5xx'd
+        # is visible in mcp-stderr.log instead of being captured-and-dropped.
+        sys.stderr.write(proc.stderr)
     return {
         "rows": rows,
         "failures": http_fail,
