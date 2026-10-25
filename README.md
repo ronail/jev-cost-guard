@@ -300,3 +300,74 @@ printf '{"tool_name":"bash","tool_result":{"output":"%s"}}' "$(python3 -c "print
 ```
 
 Prints `[jev-gate] bash: ...` and exits 0 regardless of the jev outcome.
+
+---
+
+## Native skill-routing hook (optional companion: `native/skill-router`)
+
+The portable plugin above cannot see *when the model is about to answer* — it
+only reacts to tool results. To gate a model call **before** it is made (so a
+natural prompt like *"tell me if the latest merged PR contains UI changes"*
+routes to the `jev` tools without a manual `/jev` invocation), jev-cost-guard
+ships an optional **native** Python entry under `native/skill-router/`. It
+mirrors the [`typesafe-skill-router`](https://github.com/DECRUX9812/typesafe-skill-router)
+pattern and is **shadow-first, fail-open** — it never rewrites a turn and never
+breaks one.
+
+### How it runs
+
+1. It registers a host `pre_llm_call` hook. (A portable `plugin.json` cannot do
+   this — `provides_hooks: [pre_llm_call]` requires a native `__init__.py` +
+   `plugin.yaml`.)
+2. On each fresh user turn it asks **jev** (TypeSafe, model pinned to
+   `jev-1.13.0`; OpenCode Zen relay when `TYPESAFE_API_KEY` is absent) which
+   installed skill, if any, fits — sending **only** the live skill roster
+   (name + first 200 chars of each `description`, chunked at 240; shortlisted
+   candidates also send the first 700 chars of their `SKILL.md`). No history,
+   files, or credentials are ever sent.
+3. If a skill fits the `gate` + `fits` thresholds (enforced in code), it logs
+   the decision; in `live` mode it injects **one advisory line** naming the
+   skill. The model still chooses to load it.
+
+### Install / enable
+
+```sh
+# from this repo checkout
+hermes -p dev plugins install "$(pwd)/native/skill-router"
+hermes -p dev plugins enable jev-cost-guard-skill-router
+hermes -p dev plugins config jev-cost-guard-skill-router set enabled=true mode=live
+```
+
+Requires `TYPESAFE_API_KEY` (TypeSafe Jev) or `OPENCODE_ZEN_API_KEY` (Zen relay)
+in the profile env. With neither set, the hook stays inert (fail-open).
+
+### Config
+
+| key | default | meaning |
+|---|---|---|
+| `enabled` | `false` | master switch; nothing is sent anywhere until `true` |
+| `mode` | `shadow` | `shadow` = decide + log, inject nothing; `live` = inject the suggestion line; `off` = idle |
+| `gate` | `0.30` | mean of the gate Nouls (one inverted); below this, nothing is suggested |
+| `fits` | `0.40` | winner's "does this skill do the specific thing asked" Noul; below this, no suggestion |
+| `shortlist` | `3` | candidates whose `SKILL.md` excerpt is sent in the narrow request |
+| `chunk` | `240` | skills per TypeSafe request (API caps a question at 255 options) |
+| `excerpt` | `700` | first N chars of `SKILL.md` for shortlisted candidates |
+| `suggest_chars` | `4000` | turns longer than this are left alone |
+| `timeout` | `10.0` | TypeSafe wall-clock budget for one routing decision |
+| `model` | `jev-1.13.0` | pinned for reproducibility (jev is a decision model, never a summarizer) |
+| `roster_dir` | _auto_ | comma-separated skill dirs; empty = scan `<hermes_home>/skills`, `profiles/*/skills`, `plugins/*/skills` |
+| `cache_path` | _off_ | JSON cache keyed by `mode|model|roster|turn` to skip repeat API calls |
+| `log_path` | _off_ | one line per routed turn |
+
+### Verify (no network)
+
+```sh
+cd native/skill-router
+python -m pytest tests -q            # 9/9 offline probes (transport mocked)
+hermes plugins validate .            # manifest parses; register() runs isolated
+hermes -p dev plugins call jev-skill-router status
+```
+
+> The portable plugin (`plugin.json` + `skills/` + `mcp/`) is the **default** path
+> and is unaffected by this native entry — keep both enabled only if you want
+> prompt-time auto-routing in addition to the on-demand MCP tools.
