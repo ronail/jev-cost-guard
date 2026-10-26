@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "jev": {
+      "command": "python3",
+      "args": ["<repo>/mcp/jev/server.py"],
+      "env": {
+        "TYPESAFE_API_KEY": "<your TypeSafe key; from the active profile's .env, never commit>"
+      }
+    }
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "command": "python3",
+        "args": ["<repo>/hooks/claude-codex-jev-verdict.py"],
+        "env": {
+          "TYPESAFE_API_KEY": "<your TypeSafe key>",
+          "JEV_VERDICT_THRESHOLD_CHARS": "4000"
+        }
+      }
+    ]
+  }
+}

@@ -1,8 +1,10 @@
 [
-  { "name": "jev-skill-gate", "trigger": "before responding, check the skills index is under 2.5 KB; if a task doesn't match auto_load, open a fresh scoped session", "file": "../hermes/jev-skill-gate/SKILL.md" },
-  { "name": "jev-context-economy", "trigger": "per-call token hygiene: batch calls, grep-then-read, cap output, compress at boundaries", "file": "../hermes/jev-context-economy/SKILL.md" },
-  { "name": "jev-prompt-budget-audit", "trigger": "audit fixed prompt cost; cut one toolset/skill; re-measure under budget", "file": "../hermes/jev-prompt-budget-audit/SKILL.md" },
-  { "name": "jev-context-firewall", "trigger": "push bulk extraction/analysis off the main context; only digests return", "file": "../hermes/jev-context-firewall/SKILL.md" },
-  { "name": "jev-test-output-triage", "trigger": "run tests/logs through a summary reporter; only failures reach context", "file": "../hermes/jev-test-output-triage/SKILL.md" },
-  { "name": "jev-source-digest", "trigger": "web/page sources: extract bounded, file, digest in code, cite by line range", "file": "../hermes/jev-source-digest/SKILL.md" }
+  { "name": "jev-skill-gate", "trigger": "before responding, check the skills index is under 2.5 KB; if a task doesn't match auto_load, open a fresh scoped session", "file": "../skills/jev-skill-gate/SKILL.md" },
+  { "name": "jev-context-economy", "trigger": "per-call token hygiene: batch calls, grep-then-read, cap output, compress at boundaries", "file": "../skills/jev-context-economy/SKILL.md" },
+  { "name": "jev-prompt-budget-audit", "trigger": "audit fixed prompt cost; cut one toolset/skill; re-measure under budget", "file": "../skills/jev-prompt-budget-audit/SKILL.md" },
+  { "name": "jev-context-firewall", "trigger": "push bulk extraction/analysis off the main context; only digests return", "file": "../skills/jev-context-firewall/SKILL.md" },
+  { "name": "jev-test-output-triage", "trigger": "run tests/logs through a summary reporter; only failures reach context", "file": "../skills/jev-test-output-triage/SKILL.md" },
+  { "name": "jev-source-digest", "trigger": "web/page sources: extract bounded, file, digest in code, cite by line range", "file": "../skills/jev-source-digest/SKILL.md" },
+  { "name": "jev-delegate-guard", "trigger": "delegate only when cheaper than in-context work; pick the lightest profile that covers the task", "file": "../skills/jev-delegate-guard/SKILL.md" },
+  { "name": "jev-mcp-model-server", "trigger": "use this MCP server when the jev model must be invoked through an MCP server rather than the agent's own provider path", "file": "../skills/jev-mcp-model-server/SKILL.md" }
 ]
