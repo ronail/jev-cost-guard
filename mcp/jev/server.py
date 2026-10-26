@@ -232,11 +232,20 @@ def _clean_key(value: str | None) -> str | None:
     return value
 
 
+_TYPESAFE_OFF = frozenset({"none", "public", "-", "off", "0", "skip"})
+
+
 def _typesafe_key() -> str | None:
-    """TYPESAFE_API_KEY from the environment, else from the profile .env."""
-    return _clean_key(os.environ.get("TYPESAFE_API_KEY")) or _load_profile_env_key(
-        names=_TYPESAFE_KEY_NAMES
-    )
+    """TYPESAFE_API_KEY from the environment, else from the profile .env.
+
+    A required `typesafe_api_key` in a plugin manifest has to accept some value
+    even for Zen-only users, so the sentinels above mean "not using TypeSafe"
+    and fall through to the relay instead of being sent as a credential.
+    """
+    value = _clean_key(os.environ.get("TYPESAFE_API_KEY"))
+    if value and value.strip().lower() in _TYPESAFE_OFF:
+        value = None
+    return value or _load_profile_env_key(names=_TYPESAFE_KEY_NAMES)
 
 
 def _resolve_jev_target() -> tuple[str, str, str | None]:
