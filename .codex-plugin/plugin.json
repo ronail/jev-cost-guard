@@ -1,0 +1,30 @@
+{
+  "name": "jev-cost-guard",
+  "version": "0.5.5",
+  "description": "Token-economy guard: jev decision-model MCP tools (jev_health, jev_summarize, jev_find, jev_screen), the jev-* skills, and a PostToolUse soft gate.",
+  "author": {
+    "name": "ronail"
+  },
+  "homepage": "https://github.com/ronail/jev-cost-guard",
+  "repository": "https://github.com/ronail/jev-cost-guard",
+  "license": "MIT",
+  "keywords": ["jev", "typesafe", "context", "tokens", "mcp", "skills"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "jev cost guard",
+    "shortDescription": "Token-economy guard: jev decisions, skills, and a soft gate",
+    "longDescription": "Ask jev cheap decision models instead of paying to read everything: summarize command output, screen files before loading them, and find the right file by path. Ships the four jev MCP tools, the jev-* skills, and a PostToolUse soft gate.",
+    "developerName": "ronail",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/ronail/jev-cost-guard",
+    "defaultPrompt": [
+      "Summarize this command output with jev.",
+      "Screen this file with jev before reading it all.",
+      "Find the file that implements this with jev."
+    ],
+    "brandColor": "#10A37F"
+  }
+}

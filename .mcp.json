@@ -5,7 +5,8 @@
       "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/jev/server.py"],
       "env": {
         "OPENCODE_ZEN_API_KEY": "${user_config.opencode_zen_api_key}",
-        "TYPESAFE_API_KEY": "${user_config.typesafe_api_key}"
+        "TYPESAFE_API_KEY": "${user_config.typesafe_api_key}",
+        "JEV_REQUIRE_TYPESAFE": "1"
       }
     }
   }
