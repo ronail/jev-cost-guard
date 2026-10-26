@@ -3,12 +3,14 @@
 
 Writes the jev MCP server + the PostToolUse soft-gate into your
 `claude_desktop_config.json` (in place, backing up the old file). It resolves the
-repo clone path itself, reads the jev key from your active Hermes profile `.env`
-(or env / a file you point at), so you never type `<repo>` or a key by hand.
+repo clone path itself and keeps the plugin self-contained: the jev key comes from
+`--key`, `--env-file`, this repo's own `.env`, or the shell env — never from a
+Hermes profile. With no key it runs keyless on the Zen free tier.
 
 Usage:
-    python3 scripts/install-claude-plugin.py                 # profile: dev
-    python3 scripts/install-claude-plugin.py --profile prod
+    python3 scripts/install-claude-plugin.py                 # keyless (Zen free tier)
+    python3 scripts/install-claude-plugin.py --key ts_xxx    # TypeSafe key
+    python3 scripts/install-claude-plugin.py --key xxx --provider opencode
     python3 scripts/install-claude-plugin.py --env-file /path/to/.env
     python3 scripts/install-claude-plugin.py --config /path/claude_desktop_config.json
     python3 scripts/install-claude-plugin.py --dry-run
@@ -27,7 +29,6 @@ from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_PROFILES_DIR = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "profiles"
 
 SERVER_ARGS = ["mcp/jev/server.py"]           # resolved under repo root by Claude Desktop CWD? no — made absolute below
 HOOK_ARGS = ["hooks/claude-codex-jev-verdict.py"]
@@ -122,22 +123,47 @@ def merge_jev(cfg: dict, jev_env: dict, *, uninstall: bool) -> dict:
     return cfg
 
 
+def _key_var(key: str, provider: str | None) -> str:
+    """Map a raw API key to the env var name it belongs in."""
+    if provider == "typesafe":
+        return "TYPESAFE_API_KEY"
+    if provider == "opencode":
+        return "OPENCODE_ZEN_API_KEY"
+    return "TYPESAFE_API_KEY" if key.startswith("ts_") else "OPENCODE_ZEN_API_KEY"
+
+
 def main(argv: list[str]) -> int:
     import argparse
     ap = argparse.ArgumentParser(description="Register jev-cost-guard as a Claude plugin.")
-    ap.add_argument("--profile", default="dev", help="Hermes profile whose .env holds the jev key (default: dev).")
-    ap.add_argument("--env-file", default=None, help="Explicit .env instead of the profile's.")
+    ap.add_argument("--key", default=None, help="jev provider API key (TypeSafe or OpenCode Zen).")
+    ap.add_argument("--provider", choices=("typesafe", "opencode"), default=None,
+                    help="Which provider --key belongs to (default: inferred; ts_ prefix = typesafe).")
+    ap.add_argument("--env-file", default=None, help="Explicit .env file to read the key from.")
     ap.add_argument("--config", default=None, help="claude_desktop_config.json to write (default: auto-detect).")
     ap.add_argument("--uninstall", action="store_true", help="Remove the jev entries instead of adding them.")
     ap.add_argument("--dry-run", action="store_true", help="Print the resulting config without writing.")
     args = ap.parse_args(argv)
 
     jev_env: dict[str, str] = {}
-    # precedence: explicit --env-file > profile .env > os.environ
-    env_file = Path(args.env_file) if args.env_file else (DEFAULT_PROFILES_DIR / args.profile / ".env")
-    if env_file.is_file():
-        jev_env.update(load_env(env_file))
-    jev_env.update({k: v for k, v in os.environ.items() if k.startswith("JEV_") or k in ("TYPESAFE_API_KEY", "OPENCODE_ZEN_API_KEY")})
+    # Self-contained: NEVER read a Hermes profile. Precedence (low -> high):
+    # repo-local .env, --env-file, shell env, --key.
+    source = "none (keyless -> Zen free tier)"
+    repo_env = REPO_ROOT / ".env"
+    if repo_env.is_file():
+        jev_env.update(load_env(repo_env))
+        source = str(repo_env)
+    if args.env_file:
+        jev_env.update(load_env(Path(args.env_file)))
+        source = args.env_file
+    shell = {k: v for k, v in os.environ.items()
+             if k in ("TYPESAFE_API_KEY", "OPENCODE_ZEN_API_KEY", "JEV_API_KEY")}
+    if shell:
+        jev_env.update(shell)
+        source = "shell env"
+    if args.key:
+        var = _key_var(args.key, args.provider)
+        jev_env[var] = args.key
+        source = f"--key ({var})"
 
     cfg_path = Path(args.config) if args.config else config_path()
     cfg = {"mcpServers": {}, "hooks": {"PostToolUse": []}}
@@ -151,7 +177,7 @@ def main(argv: list[str]) -> int:
 
     print(f"repo root : {_redact(str(REPO_ROOT)) if False else REPO_ROOT}")
     print(f"config    : {cfg_path}")
-    print(f"env source: {env_file if env_file.is_file() else '(none — running keyless on the Zen free tier)'}")
+    print(f"env source: {source}")
     key = jev_env.get("TYPESAFE_API_KEY") or jev_env.get("OPENCODE_ZEN_API_KEY")
     print(f"key       : {'Bearer ' + _redact(key) if key else 'public (keyless)'}")
     print(f"server    : {sys.executable or 'python3'} {' '.join(abs_args(SERVER_ARGS))}")

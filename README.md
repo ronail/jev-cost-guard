@@ -67,8 +67,9 @@ server calls TypeSafe directly — `https://api.typesafe.ai/v1/systemone`, model
 and standard JSON headers; there is no free tier and no paid-fallback retry. With
 no TypeSafe key it uses the OpenCode Zen relay: `JEV_MODEL` (default
 `jev-1.13-free`) and `JEV_ENDPOINT` (default `https://opencode.ai/zen/v1/systemone`)
-are optional, the key is **never** on the command line, and the MCP reads
-`OPENCODE_ZEN_API_KEY` from `profiles/<profile>/.env` at runtime. Force either with
+are optional and the key is **never** on the command line. Under Hermes the MCP
+also falls back to `OPENCODE_ZEN_API_KEY` in `profiles/<profile>/.env`; a generic MCP
+host (Claude, Codex) is self-contained and reads only its own config env. Force either with
 `JEV_PROVIDER=typesafe|opencode`. No browser/OAuth/device-flow. Auth modes (real key,
 the relay free-tier `Bearer public` no-key bearer, OpenCode desktop UA fingerprint,
 and failure modes) are documented in `mcp/jev/env.example` and the server docstring.
@@ -78,11 +79,11 @@ and failure modes) are documented in `mcp/jev/env.example` and the server docstr
 | `JEV_PROVIDER` | *(auto)* | `typesafe` when `TYPESAFE_API_KEY` is set, else `opencode` (Zen relay); force either |
 | `JEV_MODEL` | `jev-1.13-free` / `jev-latest` | optional — default is `jev-1.13-free` (opencode) or `jev-latest` (typesafe) |
 | `JEV_ENDPOINT` | `https://opencode.ai/zen/v1/systemone` | optional — System One endpoint (typesafe default: `https://api.typesafe.ai/v1/systemone`) |
-| `TYPESAFE_API_KEY` | (from `profiles/<profile>/.env`) | TypeSafe direct key — its presence selects `api.typesafe.ai` (`jev-latest`); no free tier, no fallback |
+| `TYPESAFE_API_KEY` | env (Hermes: profile `.env`) | TypeSafe direct key — its presence selects `api.typesafe.ai` (`jev-latest`); no free tier, no fallback |
 | `JEV_FALLBACK_TO_PAID` | `1` | `1` (default) on `jev-1.13-free` exhaustion (HTTP 429/403 with a real key) retry the paid model; `0` fails open; no-key never falls back |
 | `JEV_FALLBACK_MODEL` | `jev-1.13` | paid model retried on free exhaustion (same key/endpoint/UA; bills your opencode account) |
 | `JEV_DEBUG` | `0` | optional — `verbose` = print masked provider/key diagnostics (**not** `1`: MCP env values must be strings) |
-| `OPENCODE_ZEN_API_KEY` | (from `profiles/<profile>/.env`) | required for the real-key path |
+| `OPENCODE_ZEN_API_KEY` | env (Hermes: profile `.env`) | required for the real-key path |
 
 ### `jev_health` / `jev_summarize`
 `jev_health` probes the model with a `noul` reachability question (alive iff it
@@ -229,22 +230,24 @@ Python plugin.
 The `mcp/jev/server.py` stdio server is **dual-frame**: it answers `Content-Length`
 requests (Claude Code, Codex — strict MCP clients) and newline-delimited JSON
 (Hermes' client), so the **same server loads in every harness** with no fork.
-Expose `OPENCODE_ZEN_API_KEY` (from the active profile's `.env`, never committed) in the
+Expose the jev key (`TYPESAFE_API_KEY` or `OPENCODE_ZEN_API_KEY`, never committed) in the
 harness env, then register `python3 <repo>/mcp/jev/server.py` as an MCP server.
 jev stays the **only** oracle model; Claude Code/Codex are pure clients that call
-`jev_health` / `jev_summarize` like any other tool.
+`jev_health` / `jev_summarize` like any other tool. This path is **self-contained**:
+with no Hermes vars set, the server never reads a Hermes profile — only the env in
+its own config.
 
 `<repo>` below is your local clone of https://github.com/ronail/jev-cost-guard.
 
 ### Claude Code
 
 Add the server + hook to your Claude Code config (`claude_desktop_config.json`) — `mcpServers` and `hooks` go in the
-same file. The **recommended** install is one command — it resolves your clone path, reads the key from the active
-profile `.env`, and writes the server + gate in place:
+same file. The **recommended** install is one command — it resolves your clone path, takes the key from `--key` /
+`--env-file` / this repo's `.env` / the shell env (never a Hermes profile), and writes the server + gate in place:
 
 ```sh
-python3 scripts/install-claude-plugin.py                 # profile: dev
-python3 scripts/install-claude-plugin.py --profile prod
+python3 scripts/install-claude-plugin.py                 # keyless (Zen free tier)
+python3 scripts/install-claude-plugin.py --key ts_proj_xxx   # or --env-file .env
 ```
 
 Prefer that over editing by hand. A ready-to-edit copy also ships as
