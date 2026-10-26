@@ -217,9 +217,24 @@ def _provider_for(endpoint: str) -> str:
     return "typesafe" if "typesafe.ai" in endpoint else "opencode"
 
 
+def _clean_key(value: str | None) -> str | None:
+    """A usable bearer key, or None.
+
+    Ignores blank values and unsubstituted `${...}` placeholders (a manifest that
+    never filled `${user_config.*}`), which would otherwise be sent as a bogus
+    credential and turn every call into a 401.
+    """
+    if not value:
+        return None
+    value = value.strip()
+    if not value or value.startswith("${"):
+        return None
+    return value
+
+
 def _typesafe_key() -> str | None:
     """TYPESAFE_API_KEY from the environment, else from the profile .env."""
-    return os.environ.get("TYPESAFE_API_KEY") or _load_profile_env_key(
+    return _clean_key(os.environ.get("TYPESAFE_API_KEY")) or _load_profile_env_key(
         names=_TYPESAFE_KEY_NAMES
     )
 
@@ -254,9 +269,9 @@ def _resolve_jev_target() -> tuple[str, str, str | None]:
     endpoint = os.environ.get("JEV_ENDPOINT") or _DEFAULT_ENDPOINT
     model = os.environ.get("JEV_MODEL") or _DEFAULT_JEV_MODEL
     key = (
-        os.environ.get("JEV_API_KEY")
-        or os.environ.get("OPENCODE_ZEN_API_KEY")
-        or os.environ.get("OPENCODE_API_KEY")
+        _clean_key(os.environ.get("JEV_API_KEY"))
+        or _clean_key(os.environ.get("OPENCODE_ZEN_API_KEY"))
+        or _clean_key(os.environ.get("OPENCODE_API_KEY"))
         or _load_profile_env_key()
     )
     return endpoint, model, key
