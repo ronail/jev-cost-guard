@@ -205,10 +205,14 @@ faster it pays off. No other model is involved.
 | `skills/` | the `jev-*` Hermes skills (auto-discovered, one SKILL.md per dir) |
 | `mcp/jev/server.py` | the one jev implementation: MCP stdio server (dual-frame) + `--verdict` CLI; owns provider selection (TypeSafe / OpenCode Zen) and every fallback |
 | `mcp/jev/env.example` | env reference: TypeSafe + Zen auth, fallback knobs, failure modes |
-| `hooks/claude-codex-jev-verdict.py` | standalone soft-gate hook for Claude Code / Codex (not part of the Hermes plugin) |
-|| `claude-code/index.json` | Claude Code skills trigger index: `name`/`trigger` → `skills/<name>/SKILL.md` |
-|| `claude_desktop_config.json.example` | drop-in Claude Desktop config (MCP server + PostToolUse gate); replace `<repo>` |
-| `scripts/install-claude-plugin.py` | one-command installer: writes the MCP server + gate into your `claude_desktop_config.json` |
+| `hooks/claude-codex-jev-verdict.py` | standalone soft-gate hook for Claude Code / Codex |
+| `hooks/hooks.json` | Claude Code plugin wiring for that gate (PostToolUse) |
+| `.claude-plugin/marketplace.json` | Claude Code marketplace catalog (this repo lists itself) |
+| `.claude-plugin/plugin.json` | Claude Code plugin manifest (skills + MCP + hook + `userConfig` keys) |
+| `.mcp.json` | Claude Code plugin MCP declaration — `${CLAUDE_PLUGIN_ROOT}/mcp/jev/server.py` |
+| `claude-code/index.json` | Claude Code skills trigger index: `name`/`trigger` → `skills/<name>/SKILL.md` |
+| `claude_desktop_config.json.example` | manual (no-marketplace) Claude Desktop config template |
+| `scripts/install-claude-plugin.py` | one-command manual installer: writes the config above |
 | `docs/token-savings.md` | token-accounting + cap-removal history |
 | `LICENSE` | MIT |
 
@@ -239,7 +243,23 @@ its own config.
 
 `<repo>` below is your local clone of https://github.com/ronail/jev-cost-guard.
 
-### Claude Code
+### Claude Code — plugin marketplace (recommended)
+
+This repo is its own Claude Code marketplace (`.claude-plugin/marketplace.json`). From a Claude Code
+session:
+
+```text
+/plugin marketplace add ronail/jev-cost-guard
+/plugin install jev-cost-guard@jev-cost-guard
+```
+
+That installs the jev MCP server (`.mcp.json`), the eight `jev-*` skills (`skills/`), and the
+`PostToolUse` soft gate (`hooks/hooks.json`) as one unit. On first enable Claude prompts for the
+optional TypeSafe / OpenCode Zen keys (`userConfig`, masked, stored in the OS keychain — no Hermes
+profile is read); leave both empty to run keyless on the Zen free tier. Validate a checkout with
+`claude plugin validate .`.
+
+### Claude Code — manual install (no marketplace)
 
 Add the server + hook to your Claude Code config (`claude_desktop_config.json`) — `mcpServers` and `hooks` go in the
 same file. The **recommended** install is one command — it resolves your clone path, takes the key from `--key` /
