@@ -259,16 +259,17 @@ configuration dialog (see **Set your key**). Validate a checkout with `claude pl
 
 #### Set your key
 
-`opencode_zen_api_key` is marked `required` — that is what makes Claude Code show the dialog (it
-gates prompting on `hasRequiredConfigMissing`). Enter either:
+`typesafe_api_key` is marked `required` — that is what makes Claude Code show the dialog (it gates
+prompting on `hasRequiredConfigMissing`). Enter either:
 
-- your OpenCode Zen key, or
-- the literal word `public` to stay on the free tier (`Bearer public`).
+- your TypeSafe key (calls go to `api.typesafe.ai`), or
+- the literal word `none` to stay on the OpenCode Zen relay.
 
-The optional `typesafe_api_key` field in the same dialog switches calls to the TypeSafe direct API;
-leave it empty to stay on the Zen relay. Both are `sensitive`, so the values go to the OS keychain
-rather than `settings.json`. If you dismiss or miss the dialog, re-enable the plugin from
-`/plugin` → **Installed** to get it again.
+`none` is a sentinel the server treats as "not using TypeSafe", so a required field doesn't trap
+Zen-only users into sending a bogus key. The optional `opencode_zen_api_key` field is only consulted
+when TypeSafe says `none`: leave it empty for the keyless free tier (`Bearer public`), or paste a Zen
+key. Both are `sensitive`, so the values go to the OS keychain rather than `settings.json`. If you
+dismiss the dialog, re-enable the plugin from `/plugin` → **Installed**.
 
 Environment still works and takes precedence when you need it — `env` in `~/.claude/settings.json` is
 inherited by the MCP server and the hook:
