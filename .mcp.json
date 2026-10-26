@@ -2,11 +2,7 @@
   "mcpServers": {
     "jev": {
       "command": "python3",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/jev/server.py"],
-      "env": {
-        "TYPESAFE_API_KEY": "${user_config.typesafe_api_key}",
-        "OPENCODE_ZEN_API_KEY": "${user_config.opencode_zen_api_key}"
-      }
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/jev/server.py"]
     }
   }
 }
