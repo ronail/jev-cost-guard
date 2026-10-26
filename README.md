@@ -254,10 +254,32 @@ session:
 ```
 
 That installs the jev MCP server (`.mcp.json`), the eight `jev-*` skills (`skills/`), and the
-`PostToolUse` soft gate (`hooks/hooks.json`) as one unit. On first enable Claude prompts for the
-optional TypeSafe / OpenCode Zen keys (`userConfig`, masked, stored in the OS keychain — no Hermes
-profile is read); leave both empty to run keyless on the Zen free tier. Validate a checkout with
-`claude plugin validate .`.
+`PostToolUse` soft gate (`hooks/hooks.json`) as one unit. On enable, Claude Code opens a
+configuration dialog (see **Set your key**). Validate a checkout with `claude plugin validate .`.
+
+#### Set your key
+
+`typesafe_api_key` is marked `required` — that is what makes Claude Code show the dialog (it gates
+prompting on `hasRequiredConfigMissing`). Enter either:
+
+- your TypeSafe key (calls go to `api.typesafe.ai`), or
+- the literal word `none` to stay on the OpenCode Zen relay.
+
+`none` is a sentinel the server treats as "not using TypeSafe", so a required field doesn't trap
+Zen-only users into sending a bogus key. The optional `opencode_zen_api_key` field is only consulted
+when TypeSafe says `none`: leave it empty for the keyless free tier (`Bearer public`), or paste a Zen
+key. Both are `sensitive`, so the values go to the OS keychain rather than `settings.json`. If you
+dismiss the dialog, re-enable the plugin from `/plugin` → **Installed**.
+
+Environment still works and takes precedence when you need it — `env` in `~/.claude/settings.json` is
+inherited by the MCP server and the hook:
+
+```json
+{ "env": { "TYPESAFE_API_KEY": "ts-..." } }
+```
+
+An unfilled `${user_config.*}` placeholder is ignored by the server rather than sent as a
+credential (`_clean_key`), so the optional field can't poison the required one.
 
 ### Claude Code — manual install (no marketplace)
 
