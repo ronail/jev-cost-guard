@@ -236,7 +236,9 @@ jev stays the **only** oracle model; Claude Code/Codex are pure clients that cal
 ### Claude Code
 
 Add the server + hook to your Claude Code config (`claude_desktop_config.json`) — `mcpServers` and `hooks` go in the
-same file:
+same file. A ready-to-edit copy ships as `claude_desktop_config.json.example` — replace `<repo>` with your clone path,
+drop it at your Claude Desktop config location, and restart Claude Code. The Claude Code skills triggers are indexed in
+`claude-code/index.json` (each `file` points to the matching `skills/<name>/SKILL.md`):
 
 ```json
 {
