@@ -55,9 +55,17 @@ def _load_server() -> Any:
     env_path = os.environ.get("JEV_SERVER_PATH", "").strip()
     if env_path:
         candidates.append(Path(env_path))
+    # sibling plugin in the SAME plugins directory (installed companion layout:
+    # `<profile>/plugins/jev-cost-guard-skill-router/` sits beside
+    # `<profile>/plugins/jev-cost-guard/mcp/jev/server.py`). This is the common
+    # case once installed under a profile; the repo-root candidate above only
+    # fires when running from the source checkout.
+    candidates += sorted(Path(__file__).resolve().parents[1].glob("*/mcp/jev/server.py"))
     home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
     candidates += sorted(home.glob("plugins/*/mcp/jev/server.py"))
+    candidates += sorted(home.glob("profiles/*/plugins/*/mcp/jev/server.py"))
     candidates += sorted(home.glob("plugins/*/*/mcp/jev/server.py"))
+    candidates += sorted(home.glob("profiles/*/plugins/*/*/mcp/jev/server.py"))
     for cand in candidates:
         if not cand.is_file():
             continue
