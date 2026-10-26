@@ -205,6 +205,9 @@ faster it pays off. No other model is involved.
 | `mcp/jev/server.py` | the one jev implementation: MCP stdio server (dual-frame) + `--verdict` CLI; owns provider selection (TypeSafe / OpenCode Zen) and every fallback |
 | `mcp/jev/env.example` | env reference: TypeSafe + Zen auth, fallback knobs, failure modes |
 | `hooks/claude-codex-jev-verdict.py` | standalone soft-gate hook for Claude Code / Codex (not part of the Hermes plugin) |
+|| `claude-code/index.json` | Claude Code skills trigger index: `name`/`trigger` → `skills/<name>/SKILL.md` |
+|| `claude_desktop_config.json.example` | drop-in Claude Desktop config (MCP server + PostToolUse gate); replace `<repo>` |
+| `scripts/install-claude-plugin.py` | one-command installer: writes the MCP server + gate into your `claude_desktop_config.json` |
 | `docs/token-savings.md` | token-accounting + cap-removal history |
 | `LICENSE` | MIT |
 
@@ -236,9 +239,18 @@ jev stays the **only** oracle model; Claude Code/Codex are pure clients that cal
 ### Claude Code
 
 Add the server + hook to your Claude Code config (`claude_desktop_config.json`) — `mcpServers` and `hooks` go in the
-same file. A ready-to-edit copy ships as `claude_desktop_config.json.example` — replace `<repo>` with your clone path,
-drop it at your Claude Desktop config location, and restart Claude Code. The Claude Code skills triggers are indexed in
-`claude-code/index.json` (each `file` points to the matching `skills/<name>/SKILL.md`):
+same file. The **recommended** install is one command — it resolves your clone path, reads the key from the active
+profile `.env`, and writes the server + gate in place:
+
+```sh
+python3 scripts/install-claude-plugin.py                 # profile: dev
+python3 scripts/install-claude-plugin.py --profile prod
+```
+
+Prefer that over editing by hand. A ready-to-edit copy also ships as
+`claude_desktop_config.json.example` — replace `<repo>` with your clone path, drop it at your Claude Desktop config
+location, and restart Claude Code. The Claude Code skills triggers are indexed in `claude-code/index.json` (each
+`file` points to the matching `skills/<name>/SKILL.md`). The config this installer writes looks like:
 
 ```json
 {
