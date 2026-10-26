@@ -254,10 +254,30 @@ session:
 ```
 
 That installs the jev MCP server (`.mcp.json`), the eight `jev-*` skills (`skills/`), and the
-`PostToolUse` soft gate (`hooks/hooks.json`) as one unit. On first enable Claude prompts for the
-optional TypeSafe / OpenCode Zen keys (`userConfig`, masked, stored in the OS keychain — no Hermes
-profile is read); leave both empty to run keyless on the Zen free tier. Validate a checkout with
-`claude plugin validate .`.
+`PostToolUse` soft gate (`hooks/hooks.json`) as one unit. Keys come from the environment (see
+**Set your key** below); with no key the server runs keyless on the Zen free tier. Validate a
+checkout with `claude plugin validate .`.
+
+#### Set your key
+
+Claude Code passes `env` from `~/.claude/settings.json` to plugin MCP servers and hook processes, so
+that is the one place to set it:
+
+```json
+{
+  "env": {
+    "TYPESAFE_API_KEY": "ts-..."
+  }
+}
+```
+
+Use `OPENCODE_ZEN_API_KEY` instead to run the Zen models on your own key. Omit both to run keyless
+(`Bearer public`, Zen free tier). Restart `claude` after editing.
+
+> Why not `userConfig`? Claude Code only opens the configuration dialog when an option is marked
+> `required` and has no stored value (the binary gates it on `hasRequiredConfigMissing`), and
+> `sensitive` options are also excluded from `/config` afterwards. This plugin's keys are optional —
+> keyless is the default — so a prompt would never fire. `env` is the supported path.
 
 ### Claude Code — manual install (no marketplace)
 
