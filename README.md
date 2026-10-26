@@ -254,30 +254,31 @@ session:
 ```
 
 That installs the jev MCP server (`.mcp.json`), the eight `jev-*` skills (`skills/`), and the
-`PostToolUse` soft gate (`hooks/hooks.json`) as one unit. Keys come from the environment (see
-**Set your key** below); with no key the server runs keyless on the Zen free tier. Validate a
-checkout with `claude plugin validate .`.
+`PostToolUse` soft gate (`hooks/hooks.json`) as one unit. On enable, Claude Code opens a
+configuration dialog (see **Set your key**). Validate a checkout with `claude plugin validate .`.
 
 #### Set your key
 
-Claude Code passes `env` from `~/.claude/settings.json` to plugin MCP servers and hook processes, so
-that is the one place to set it:
+`opencode_zen_api_key` is marked `required` — that is what makes Claude Code show the dialog (it
+gates prompting on `hasRequiredConfigMissing`). Enter either:
+
+- your OpenCode Zen key, or
+- the literal word `public` to stay on the free tier (`Bearer public`).
+
+The optional `typesafe_api_key` field in the same dialog switches calls to the TypeSafe direct API;
+leave it empty to stay on the Zen relay. Both are `sensitive`, so the values go to the OS keychain
+rather than `settings.json`. If you dismiss or miss the dialog, re-enable the plugin from
+`/plugin` → **Installed** to get it again.
+
+Environment still works and takes precedence when you need it — `env` in `~/.claude/settings.json` is
+inherited by the MCP server and the hook:
 
 ```json
-{
-  "env": {
-    "TYPESAFE_API_KEY": "ts-..."
-  }
-}
+{ "env": { "TYPESAFE_API_KEY": "ts-..." } }
 ```
 
-Use `OPENCODE_ZEN_API_KEY` instead to run the Zen models on your own key. Omit both to run keyless
-(`Bearer public`, Zen free tier). Restart `claude` after editing.
-
-> Why not `userConfig`? Claude Code only opens the configuration dialog when an option is marked
-> `required` and has no stored value (the binary gates it on `hasRequiredConfigMissing`), and
-> `sensitive` options are also excluded from `/config` afterwards. This plugin's keys are optional —
-> keyless is the default — so a prompt would never fire. `env` is the supported path.
+An unfilled `${user_config.*}` placeholder is ignored by the server rather than sent as a
+credential (`_clean_key`), so the optional field can't poison the required one.
 
 ### Claude Code — manual install (no marketplace)
 
