@@ -209,6 +209,7 @@ faster it pays off. No other model is involved.
 | `hooks/hooks.json` | Claude Code plugin wiring for that gate (PostToolUse) |
 | `.claude-plugin/marketplace.json` | Claude Code marketplace catalog (this repo lists itself) |
 | `.claude-plugin/plugin.json` | Claude Code plugin manifest (skills + MCP + hook + `userConfig` keys) |
+| `.codex-plugin/plugin.json` | Codex plugin manifest (skills + MCP + hook + `interface`) |
 | `.mcp.json` | Claude Code plugin MCP declaration — `${CLAUDE_PLUGIN_ROOT}/mcp/jev/server.py` |
 | `claude-code/index.json` | Claude Code skills trigger index: `name`/`trigger` → `skills/<name>/SKILL.md` |
 | `claude_desktop_config.json.example` | manual (no-marketplace) Claude Desktop config template |
@@ -337,19 +338,52 @@ and paid-jev fallback (`JEV_FALLBACK_TO_PAID` / `JEV_FALLBACK_MODEL`) apply.
 
 ### Codex
 
-Register the server with the verified CLI (writes Codex's `config.toml`):
+Install as a Codex plugin. This repo is also a Codex marketplace — Codex reads the
+legacy `.claude-plugin/marketplace.json`, so no extra catalog file is needed:
 
 ```sh
-codex mcp add jev -- python3 <repo>/mcp/jev/server.py \
-  --env TYPESAFE_API_KEY=<your TypeSafe key>
+codex plugin marketplace add ronail/jev-cost-guard
+codex plugin add jev-cost-guard@jev-cost-guard
+codex plugin list     # jev-cost-guard   installed, enabled
+codex mcp list        # jev -> mcp/jev/server.py
 ```
 
-(Use `--env OPENCODE_ZEN_API_KEY=<key>` instead to run on the Zen relay.)
+That brings in the four jev MCP tools, the eight `jev-*` skills (`skills/`), and the
+`PostToolUse` gate (`hooks/hooks.json`).
 
-Codex surfaces jev tools natively. For the **auto-gate**, add a tool-result hook
-in Codex's `config.toml` that runs `hooks/claude-codex-jev-verdict.py` with the
-same env (check `codex --help` for the exact `hooks` schema on your version). Same
-soft-gate semantics: verdict logged, exits 0.
+**The TypeSafe key is required.** Codex has no plugin configuration dialog — its binary
+carries no `userConfig`, `CLAUDE_PLUGIN_OPTION_*`, or `pluginConfigs` — so the requirement is
+enforced by the server at runtime instead. Without a key every jev tool returns:
+
+```text
+TYPESAFE_API_KEY is required by this plugin but is not set. Provide it in the environment …
+```
+
+and the soft gate stays inert. Supply it in Codex's environment:
+
+```sh
+export TYPESAFE_API_KEY=ts-...        # or add it to your shell profile
+```
+
+To use the OpenCode Zen relay instead, opt out explicitly:
+
+```sh
+export JEV_PROVIDER=opencode          # or OPENCODE_ZEN_API_KEY=... for a paid Zen key
+```
+
+The switch is host-aware: Codex sets `PLUGIN_ROOT` and not `CLAUDE_PLUGIN_ROOT`, so the
+requirement turns on automatically there. `JEV_REQUIRE_TYPESAFE=0|1` overrides it either way.
+
+Manual registration without the plugin still works:
+
+```sh
+codex mcp add jev -- python3 <repo>/mcp/jev/server.py
+```
+
+Codex surfaces jev tools natively. For the **auto-gate**, the plugin already wires
+`hooks/hooks.json`; a manual install can point a tool-result hook at
+`hooks/claude-codex-jev-verdict.py` with the same env. Same soft-gate semantics: verdict
+logged, exits 0.
 
 ### Hook verification
 
