@@ -19,6 +19,16 @@ Wiring:
 """
 import json, os, subprocess, sys
 
+# Claude Code plugin: userConfig values arrive as CLAUDE_PLUGIN_OPTION_<KEY>
+# (uppercased), not under the jev env names. Map them so the jev call can
+# authenticate under a plugin install without reading a Hermes profile.
+for _opt, _env in (
+    ("CLAUDE_PLUGIN_OPTION_TYPESAFE_API_KEY", "TYPESAFE_API_KEY"),
+    ("CLAUDE_PLUGIN_OPTION_OPENCODE_ZEN_API_KEY", "OPENCODE_ZEN_API_KEY"),
+):
+    if os.environ.get(_opt) and not os.environ.get(_env):
+        os.environ[_env] = os.environ[_opt]
+
 HERE = os.path.dirname(os.path.abspath(__file__))  # this file's dir (hooks/)
 REPO_ROOT = os.path.dirname(HERE)  # repo root (parent of hooks/)
 SERVER = os.path.join(REPO_ROOT, "mcp", "jev", "server.py")

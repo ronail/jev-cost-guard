@@ -1,0 +1,28 @@
+{
+  "name": "jev-cost-guard",
+  "displayName": "jev cost guard",
+  "version": "0.5.0",
+  "description": "Token-economy guard: jev decision-model MCP tools (jev_health, jev_summarize, jev_find, jev_screen), the jev-* skills, and a PostToolUse soft gate.",
+  "author": {
+    "name": "ronail"
+  },
+  "homepage": "https://github.com/ronail/jev-cost-guard",
+  "repository": "https://github.com/ronail/jev-cost-guard",
+  "license": "MIT",
+  "keywords": ["jev", "typesafe", "context", "tokens", "mcp", "skills"],
+  "defaultEnabled": true,
+  "userConfig": {
+    "typesafe_api_key": {
+      "type": "string",
+      "title": "TypeSafe API key (optional)",
+      "description": "TypeSafe direct key. When set, jev calls go to api.typesafe.ai. Leave empty to use the OpenCode Zen free tier.",
+      "sensitive": true
+    },
+    "opencode_zen_api_key": {
+      "type": "string",
+      "title": "OpenCode Zen API key (optional)",
+      "description": "OpenCode Zen bearer key for the jev models. Leave empty to run keyless with the relay's public bearer (free tier).",
+      "sensitive": true
+    }
+  }
+}

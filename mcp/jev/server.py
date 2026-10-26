@@ -39,10 +39,13 @@ output tokens. Use it to GATE / triage large tool results with a cheap oracle
 instead of feeding the full text through an LLM. It cannot emit text digests,
 so jev_summarize returns a probability signal (see its description).
 
-The API key is NOT in this file or config. The MCP subprocess reads
-OPENCODE_API_KEY / OPENCODE_ZEN_API_KEY from ~/.hermes/profiles/dev/.env (the same
-credential the opencode-zen provider uses). No secret is ever committed
-(JEV_DEBUG=1 prints key presence/path only, never values).
+The API key is NOT in this file or config. The key is read from the MCP host's
+env, and — only when running under Hermes (`HERMES_HOME`/`HERMES_PROFILE` or
+`JEV_MCP` set) — from the profile `.env`, reusing the SAME credential the
+opencode-zen provider uses. A generic MCP host (Claude Desktop / Claude Code /
+Codex) is self-contained: it sets none of those vars, so the server never reads a
+Hermes profile and uses only the env passed in its own config. No secret is ever
+committed (JEV_DEBUG prints key presence/path only, never values).
 
 Tools:
   jev_health      probe jev reachability via a `noul` question (alive iff jev
@@ -162,13 +165,25 @@ def _load_profile_env_key(
     explicit = os.environ.get("JEV_PROFILE_ENV")
     if explicit:
         candidates.append(explicit)
-    hermes_home = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
-    prof = os.environ.get("HERMES_PROFILE") or os.environ.get("JEV_PROFILE") or profile
-    candidates.append(os.path.join(hermes_home, ".env"))
-    candidates.append(os.path.join(hermes_home, "profiles", prof, ".env"))
-    base = os.environ.get("HERMES_HOME_BASE") or os.path.expanduser("~/.hermes")
-    if base != hermes_home:
-        candidates.append(os.path.join(base, "profiles", prof, ".env"))
+    # Hermes-profile scanning is OPT-IN: only when running under Hermes (it sets
+    # HERMES_HOME / HERMES_PROFILE, and the portable MCP manifest sets JEV_MCP=1).
+    # A generic MCP host (Claude Desktop/Code, Codex) sets none of these, so the
+    # server is self-contained there — it uses only the env from its own config
+    # and never reaches into a Hermes profile. This is what keeps the Claude
+    # plugin free of a Hermes dependency.
+    if (
+        os.environ.get("JEV_MCP")
+        or os.environ.get("HERMES_HOME")
+        or os.environ.get("HERMES_PROFILE")
+        or os.environ.get("JEV_PROFILE")
+    ):
+        hermes_home = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+        prof = os.environ.get("HERMES_PROFILE") or os.environ.get("JEV_PROFILE") or profile
+        candidates.append(os.path.join(hermes_home, ".env"))
+        candidates.append(os.path.join(hermes_home, "profiles", prof, ".env"))
+        base = os.environ.get("HERMES_HOME_BASE") or os.path.expanduser("~/.hermes")
+        if base != hermes_home:
+            candidates.append(os.path.join(base, "profiles", prof, ".env"))
     for env_path in candidates:
         if not env_path or not os.path.exists(env_path):
             continue
