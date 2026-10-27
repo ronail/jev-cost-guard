@@ -1218,10 +1218,14 @@ def main() -> None:
         params = msg.get("params") or {}
 
         if method == "initialize":
+            # Echo the client's protocolVersion: some hosts (Codex) drop the
+            # server's tools when the negotiated version looks too old, and this
+            # transport is identical across all MCP revisions anyway.
+            requested = str(params.get("protocolVersion") or "").strip()
             _send({
                 "jsonrpc": "2.0", "id": mid,
                 "result": {
-                    "protocolVersion": "2024-11-05",
+                    "protocolVersion": requested or "2024-11-05",
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": "jev", "version": "1.1.0"},
                 },
