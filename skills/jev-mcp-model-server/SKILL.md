@@ -19,12 +19,17 @@ agent cannot call jev directly because `https://opencode.ai/zen/v1/systemone` is
 relay-gated (requires an OpenCode UA + `Authorization`; a bare/missing bearer yields
 403 FreeTierError, or 403/1010 without an OpenCode UA). Whenever a skill would
 otherwise call the jev model directly, route it through this MCP (`mcp/jev/server.py`)
-instead — it resolves the key from the profile `.env` and sends the correct fingerprint
+instead — it resolves the key from the env the harness gives it and sends the correct fingerprint
 + auth. The primary model in scope is `jev-1.13-free`; on free
 exhaustion (HTTP 429/403) with a real key, falls back to paid `jev-1.13` (same
 key/endpoint/UA; `JEV_FALLBACK_TO_PAID` default 1, `=0` fails open, no-key never).
 
 ## Procedure (in order)
+
+Harness-neutral: steps name a capability, and the concrete tool/registry name for
+each runtime is in
+[docs/harness-adapters.md](https://github.com/ronail/jev-cost-guard/blob/main/docs/harness-adapters.md).
+Wire the server into the harness you are running in — never another runtime's CLI.
 
 ### 1. Stand up a stdio MCP server with zero dependencies
 - Pure stdlib: json, sys, os, urllib.request, urllib.error. No `mcp` package (MCP subprocess python has no project venv).
@@ -34,8 +39,9 @@ key/endpoint/UA; `JEV_FALLBACK_TO_PAID` default 1, `=0` fails open, no-key never
 - jev-1.13-free is a **System One DECISION model** (not chat): endpoint `https://opencode.ai/zen/v1/systemone`, body `{"model","state","questions"}` with `noul`/`choice`/`score` question types, response is probabilities + `usage` (~21 output tokens), NOT `choices`/`delta`.
 - Do NOT use `/chat/completions` for jev — it 400s `ModelProtocolUnsupported`.
 
-### 3. Reuse the profile secret WITHOUT committing it
-- Key precedence: JEV_API_KEY -> OPENCODE_ZEN_API_KEY -> profile .env (read directly, never echoed).
+### 3. Reuse the harness's own secret WITHOUT committing it
+- Key precedence: JEV_API_KEY -> OPENCODE_ZEN_API_KEY -> (Hermes only) the active profile `.env`, read directly, never echoed.
+- Do not reach into another runtime's config for a key: if it isn't in your env, the harness you're in hasn't been configured yet.
 - Debug logs print yes/no + masked prefix/suffix only.
 
 ### 4. Auth: real key OR free-tier public bearer (no key)
@@ -48,34 +54,39 @@ key/endpoint/UA; `JEV_FALLBACK_TO_PAID` default 1, `=0` fails open, no-key never
 - Non-2xx -> read the body, surface it verbatim (FreeTierError / code 1010 tell you which guard tripped).
 - Success body is JSON `{"model","answers":{<q>:{...}},"usage":{...}}` — NOT SSE. Read `answers[<question>]` (`noul` float, etc.).
 
-### 6. Wire + verify
-- Enable: `hermes config set mcp_servers.jev.enabled true` (then `hermes mcp list` shows `jev ✓ enabled`), or `hermes -p <profile> mcp add jev --command python3 --env JEV_MODEL=jev-1.13-free --args <repo>/mcp/jev/server.py`.
-- Verify with a real tools/call on `jev_health` (a `noul` reachability question) — a calibrated probability back means the endpoint is alive.
+### 6. Register + verify in your own harness
+- Register the *same* `python3 <repo>/mcp/jev/server.py` with whatever MCP registry
+  the harness you are running in provides — see the table below. Register it where
+  you are; never drive another harness's CLI or write another harness's config.
+- Verify with a real `tools/call` on `jev_health` (a `noul` reachability question) —
+  a calibrated probability back means the endpoint is alive.
 - Canonical working implementation: `mcp/jev/server.py` in https://github.com/ronail/jev-cost-guard (`<repo>` below = your clone).
 - Auth matrix + failure modes: references/opencode-zen-free-bypass.md
 - Starter file: templates/mcp-stdlib-skeleton.py (systemone stub; copy + modify).
 
-## Using jev in Claude Code and Codex
+## Registering the server per harness
 
-The **same** `mcp/jev/server.py` MCP server loads in all three harnesses because
-its stdio transport auto-detects framing: `Content-Length` headers (Claude Code,
-Codex — strict MCP clients) **and** newline-delimited JSON (Hermes' bundled client).
-No per-harness fork. Register it identically everywhere:
+The **same** `mcp/jev/server.py` loads in every harness because its stdio transport
+auto-detects framing: `Content-Length` headers (strict MCP clients) **and**
+newline-delimited JSON (line-oriented clients). No per-harness fork. The command is
+always `python3 <repo>/mcp/jev/server.py`; only the registry differs:
 
-```sh
-# put OPENCODE_ZEN_API_KEY (from the active profile's .env, never committed) in the
-# harness env, then point its MCP registry at the server:
-python3 <repo>/mcp/jev/server.py
-```
+| harness | register with | env |
+|---|---|---|
+| Hermes | `hermes -p <profile> mcp add jev --command python3 --args <repo>/mcp/jev/server.py`, or `mcp_servers` in the profile `config.yaml` | profile `.env`, or `--env JEV_MODEL=…` |
+| Claude Code | `mcpServers.jev` in the Claude Code config (plus `hooks.PostToolUse` for the gate) | that config's `env`, or the OS env |
+| Codex | `codex mcp add jev -- python3 <repo>/mcp/jev/server.py`, or `[mcp_servers.jev]` in `config.toml` | `env_vars` / `[mcp_servers.jev.env]` |
+| anything else | its MCP registry / config file | its own env |
 
-- **Hermes**: `hermes -p dev mcp add jev --command python3 --env JEV_MODEL=jev-1.13-free --args <repo>/mcp/jev/server.py` (already `mcp_servers.jev.enabled: true` in the dev profile).
-- **Claude Code**: add `mcpServers.jev` + `hooks.PostToolUse` to your Claude Code config (`claude_desktop_config.json`) — see README [## Using jev in Claude Code / Codex](https://github.com/ronail/jev-cost-guard#using-jev-in-claude-code--codex) for the full JSON config.
-- **Codex**: `codex mcp add jev -- python3 <repo>/mcp/jev/server.py` (env in Codex's `config.toml` or the shell). Codex exposes the jev tools as native tools.
+Rules that keep this portable: register in **your** harness only; never run another
+runtime's CLI or edit another runtime's config from here; and put the key in the
+place that harness reads (Hermes: the profile `.env`; others: their own config or
+the process env — never a file owned by a different harness).
 
-### Auto-gate (soft, never blocks) in Claude Code / Codex
+### Auto-gate (soft, never blocks)
 
-Claude Code fires a `PostToolUse` hook after a tool with the tool's output on
-stdin; Codex fires an equivalent hook. `hooks/claude-codex-jev-verdict.py` reads
+A `PostToolUse`-style hook fires after each tool with the tool's output on stdin.
+`hooks/claude-codex-jev-verdict.py` reads
 that envelope, and when the output exceeds `JEV_VERDICT_THRESHOLD_CHARS`
 (default 4000) pipes it to `mcp/jev/server.py --verdict` (the **one-shot CLI**
 baked into the server — the hook hosts no MCP server). jev answers the
@@ -84,13 +95,13 @@ baked into the server — the hook hosts no MCP server). jev answers the
 session — this is a soft gate that *annotates* results, it does not mutate the
 transcript. The verdict reuses `_jev_ask`, so the same auth + paid-jev fallback
 (`JEV_FALLBACK_TO_PAID` / `JEV_FALLBACK_MODEL`) applies; no-key runs free-tier
-`Bearer public` with no fallback. Register it:
-
-- Claude Code: your Claude Code config (`claude_desktop_config.json`) → `hooks.PostToolUse = [{"command":"python3 <repo>/hooks/claude-codex-jev-verdict.py", "env":{...}}]` (full JSON in README).
-- Codex: a tool-result hook in Codex's `config.toml` running the same script (see `codex --help` for the exact `hooks` schema).
+`Bearer public` with no fallback. Register it the same way as the server — in your
+own harness's hook registry (Claude Code: `hooks.PostToolUse` in its config; Codex: a
+tool-result hook in its `config.toml`; anything else: its hook mechanism). The
+script's contract is just stdin envelope → JSON verdict line on stdout, exit 0.
 
 ## Pitfalls
-- The key lives in the active profile's `.env` (never committed); the loader resolves it — see [`mcp/jev/env.example`](https://github.com/ronail/jev-cost-guard/blob/main/mcp/jev/env.example). `HERMES_HOME` is the profile dir under Hermes.
+- The key comes from the harness you are running in (Hermes: the active profile's `.env`, resolved by the loader; elsewhere: that harness's own config or the process env) — never committed, never read from another runtime's directory. See [`mcp/jev/env.example`](https://github.com/ronail/jev-cost-guard/blob/main/mcp/jev/env.example).
 - Response is JSON (systemone), NOT SSE — do not assume chat-completions stream parsing for jev.
 - No key is NOT "no Authorization": send `Bearer public` for the free tier; only a truly-missing bearer 403s.
 - Relay 403 FreeTierError / code 1010 with all conditions met + key last_status ok is relay state or a missing UA, not a code bug; stop retrying.

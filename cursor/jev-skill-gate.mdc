@@ -1,5 +1,24 @@
 ---
-description: jev-skill-gate — trim the skills index to only what the task needs
+description: jev-skill-gate — keep the skills index under 2.5 KB by pruning at config level
 globs: ["**/*"]
 ---
-Before replying, check the loaded skills index is under 2.5 KB (`hermes prompt-size --json | jq '.skills_index.bytes'`). If the current task doesn't map to a skill in `skills.auto_load`, open a fresh scoped session (`hermes -p <profile> chat -s <needed> -s <needed2>`) instead of letting an unrelated skill ride in.
+
+Before replying, estimate the skills index this session shipped. Use the
+harness's native measurement if it has one (Hermes only: `prompt-size --json`);
+otherwise run the portable estimator — no harness CLI, no network, no lock:
+
+```sh
+python3 scripts/prompt_budget.py     # or the standalone snippet in the jev-skill-gate skill
+```
+
+If the total is over 2,500 B, remove the fattest skills the current task cannot
+use from **this** harness's roster (a config key if the harness has one,
+otherwise move the skill directory to an attic path so the trim is reversible)
+and re-measure. Never edit another harness's config, and never run another
+runtime's CLI to measure — a Codex session does not call `hermes`, a Hermes
+session does not call `codex`.
+
+Pruning only takes effect next session: start a fresh one, and keep this one lean
+by loading nothing the task does not need. If measurement tooling is
+unavailable, quote the estimator's number as an estimate instead of reporting the
+audit as blocked.
