@@ -351,6 +351,28 @@ codex mcp list        # jev -> mcp/jev/server.py
 That brings in the four jev MCP tools, the eight `jev-*` skills (`skills/`), and the
 `PostToolUse` gate (`hooks/hooks.json`).
 
+#### Codex desktop app: Settings → MCP servers
+
+The ChatGPT desktop app, Codex CLI, and the IDE extension share one MCP configuration, and the
+**Settings → MCP servers** page is just a form over `[mcp_servers.*]` in `~/.codex/config.toml`.
+
+1. **Settings → MCP servers → Add server**
+2. Name `jev`, transport **STDIO**, command `python3`, argument `<repo>/mcp/jev/server.py`
+3. **Save**, then **Restart**
+
+The form only covers name, transport, command and URL — there is no env editor — so put the key
+in the same file as a table and restart again:
+
+```toml
+[mcp_servers.jev.env]
+TYPESAFE_API_KEY = "ts-…"
+JEV_REQUIRE_TYPESAFE = "1"
+```
+
+Two caveats for the desktop app: re-saving the server from that page can drop hand-added tables
+(re-paste them if the key stops working), and GUI-launched apps do not read your shell profile, so
+`env_vars` forwarding is unreliable there — set the value inline. Verify with `codex mcp get jev`.
+
 **The TypeSafe key is required.** Codex has no plugin configuration dialog — its binary
 carries no `userConfig`, `CLAUDE_PLUGIN_OPTION_*`, or `pluginConfigs` — so the requirement is
 enforced by the server at runtime instead. Without a key every jev tool returns:
