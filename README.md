@@ -359,11 +359,33 @@ enforced by the server at runtime instead. Without a key every jev tool returns:
 TYPESAFE_API_KEY is required by this plugin but is not set. Provide it in the environment …
 ```
 
-and the soft gate stays inert. Supply it in Codex's environment:
+Codex also **scrubs** the environment it hands to stdio MCP servers: a server spawned by
+`codex exec` sees only `HOME`, `PATH`, `SHELL`, `TMPDIR`, `USER`, `LOGNAME`, `LC_CTYPE`,
+`__CF_USER_TEXT_ENCODING`. A bare `export TYPESAFE_API_KEY=…` therefore never reaches jev. The
+key has to be declared for the server in `~/.codex/config.toml`:
 
-```sh
-export TYPESAFE_API_KEY=ts-...        # or add it to your shell profile
+```toml
+[mcp_servers.jev]
+command = "python3"
+args = ["<repo>/mcp/jev/server.py"]
+env_vars = ["TYPESAFE_API_KEY"]          # forward from Codex's own environment
+
+[mcp_servers.jev.env]
+JEV_REQUIRE_TYPESAFE = "1"
 ```
+
+Then export the key in whatever launches Codex (`export TYPESAFE_API_KEY=ts-…`), or skip
+`env_vars` and set the value inline:
+
+```toml
+[mcp_servers.jev.env]
+TYPESAFE_API_KEY = "ts-…"
+JEV_REQUIRE_TYPESAFE = "1"
+```
+
+`env_vars` is Codex's documented "allow and forward" list — verified: the value arrives in the
+spawned server's environment, while unlisted variables do not. `codex mcp get jev` shows the
+resolved command and the forwarded names.
 
 To use the OpenCode Zen relay instead, opt out explicitly:
 
@@ -372,7 +394,13 @@ export JEV_PROVIDER=opencode          # or OPENCODE_ZEN_API_KEY=... for a paid Z
 ```
 
 The switch is host-aware: Codex sets `PLUGIN_ROOT` and not `CLAUDE_PLUGIN_ROOT`, so the
-requirement turns on automatically there. `JEV_REQUIRE_TYPESAFE=0|1` overrides it either way.
+requirement turns on automatically for plugin-loaded servers. `JEV_REQUIRE_TYPESAFE=0|1`
+overrides it either way.
+
+> Plugin **skills and hooks** load in Codex (the `jev-*` skills appear in its context), but
+> `codex exec` 0.153.4 does not surface stdio MCP tools in the model's tool list — even for an
+> explicitly registered server. Register the server as above and check `codex mcp list` /
+> `codex mcp get jev`; the tools themselves are host-dependent.
 
 Manual registration without the plugin still works:
 
