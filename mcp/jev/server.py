@@ -234,6 +234,52 @@ def _clean_key(value: str | None) -> str | None:
 
 _TYPESAFE_OFF = frozenset({"none", "public", "-", "off", "0", "skip"})
 
+_ZEN_PROVIDERS = frozenset({"opencode", "zen", "opencode-zen", "zen-relay"})
+
+
+def _typesafe_opt_out() -> bool:
+    """True when the caller explicitly asked for the Zen relay."""
+    raw = (os.environ.get("TYPESAFE_API_KEY") or "").strip().lower()
+    if raw in _TYPESAFE_OFF:
+        return True
+    return (os.environ.get("JEV_PROVIDER") or "").strip().lower() in _ZEN_PROVIDERS
+
+
+def _require_typesafe_flag() -> bool:
+    """Whether TypeSafe is mandatory for this host.
+
+    An explicit `JEV_REQUIRE_TYPESAFE` always wins. Otherwise the host decides:
+    Codex sets `PLUGIN_ROOT` (and no `CLAUDE_PLUGIN_ROOT`), Claude Code sets
+    `CLAUDE_PLUGIN_ROOT`. Codex has no plugin config dialog, so this is how
+    "required" is expressed there.
+    """
+    raw = os.environ.get("JEV_REQUIRE_TYPESAFE")
+    if raw is not None:
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    return bool(os.environ.get("PLUGIN_ROOT")) and not os.environ.get(
+        "CLAUDE_PLUGIN_ROOT"
+    )
+
+
+def _typesafe_required_error() -> str | None:
+    """Message when TypeSafe is required for this host and no key is usable.
+
+    Codex has no plugin configuration dialog (no `userConfig`, no
+    `CLAUDE_PLUGIN_OPTION_*`), so "required" is enforced here instead: the tool
+    call fails with a message the model can act on, rather than silently
+    falling back to the keyless relay.
+    """
+    if not _require_typesafe_flag():
+        return None
+    if _typesafe_key() or _typesafe_opt_out():
+        return None
+    return (
+        "TYPESAFE_API_KEY is required by this plugin but is not set. Provide it "
+        "in the environment (e.g. export TYPESAFE_API_KEY=... in the shell or in "
+        "the MCP server's env block), or set JEV_PROVIDER=opencode to use the "
+        "OpenCode Zen relay instead."
+    )
+
 
 def _typesafe_key() -> str | None:
     """TYPESAFE_API_KEY from the environment, else from the profile .env.
@@ -320,6 +366,9 @@ def _systemone_post(state, questions: dict, *, model: str | None = None,
     Returns the `answers` map (possibly empty).
     """
     endpoint, default_model, key = _resolve_jev_target()
+    required_error = _typesafe_required_error()
+    if required_error:
+        raise RuntimeError(required_error)
     model = model or default_model
     provider = _provider_for(endpoint)
     body = {"model": model, "state": state, "questions": questions}
