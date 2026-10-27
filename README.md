@@ -402,6 +402,28 @@ TYPESAFE_API_KEY = "ts-…"
 JEV_REQUIRE_TYPESAFE = "1"
 ```
 
+**Which bucket your server lands in.** A server declared by the plugin appears under
+**MCPs → From plugins**, which is read-only — no env editing there. For an editable entry under
+**MCPs → Servers**, register it in `~/.codex/config.toml` and switch the plugin's copy off so you
+don't get two:
+
+```toml
+[plugins."jev-cost-guard@jev-cost-guard".mcp_servers.jev]
+enabled = false
+
+[mcp_servers.jev]
+command = "python3"
+args = ["<repo>/mcp/jev/server.py"]
+env_vars = ["TYPESAFE_API_KEY"]
+
+[mcp_servers.jev.env]
+JEV_REQUIRE_TYPESAFE = "1"
+```
+
+Point `args` at the repo checkout (stable across plugin updates) or at
+`~/.codex/plugins/cache/jev-cost-guard/jev-cost-guard/<version>/mcp/jev/server.py`. With this in
+place `codex mcp list` shows a single `jev` carrying those env values.
+
 Two caveats for the desktop app: re-saving the server from that page can drop hand-added tables
 (re-paste them if the key stops working), and GUI-launched apps do not read your shell profile, so
 `env_vars` forwarding is unreliable there — set the value inline. Verify with `codex mcp get jev`.
