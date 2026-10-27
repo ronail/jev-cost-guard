@@ -438,18 +438,29 @@ TYPESAFE_API_KEY is required by this plugin but is not set. Store it once with
 ```
 
 **Store the key once.** The server resolves, in order: `TYPESAFE_API_KEY` → `~/.config/jev/api_key`
-→ Hermes profile `.env` → keyless relay.
+→ Hermes profile `.env` → keyless relay. Write the file directly — no repo or plugin path needed:
 
 ```sh
-python3 <repo>/mcp/jev/server.py --set-key      # hidden prompt, writes the file 0600
-python3 <repo>/mcp/jev/server.py --key-status   # which source is in use, and the endpoint it selects
-python3 <repo>/mcp/jev/server.py --clear-key
+mkdir -p ~/.config/jev
+printf '%s\n' "ts-…" > ~/.config/jev/api_key     # or the word none for the free Zen relay
+chmod 600 ~/.config/jev/api_key
 ```
 
-The file is what makes this work on Codex: Codex **scrubs** the environment it hands to stdio MCP
+That is the part that makes Codex work: Codex **scrubs** the environment it hands to stdio MCP
 servers (a spawned server sees only `HOME`, `PATH`, `SHELL`, `TMPDIR`, `USER`, `LOGNAME`, `LC_CTYPE`,
 `__CF_USER_TEXT_ENCODING`), so a bare `export TYPESAFE_API_KEY=…` never arrives. A file the server
-opens itself does. `--set-key none` writes the sentinel that selects the free Zen relay.
+opens itself does.
+
+The installed server can do the same for you, if you'd rather not echo the key:
+
+```sh
+codex mcp get jev      # prints the installed server path in its args
+python3 ~/.codex/plugins/cache/jev-cost-guard/jev-cost-guard/<version>/mcp/jev/server.py --set-key
+python3 ~/.codex/plugins/cache/jev-cost-guard/jev-cost-guard/<version>/mcp/jev/server.py --key-status
+```
+
+`--set-key` prompts with hidden input and writes the file `0600`; `--key-status` reports which
+source is in use and the endpoint and model it selects; `--clear-key` removes it.
 
 If you prefer Codex to own the credential instead, both of these also work:
 

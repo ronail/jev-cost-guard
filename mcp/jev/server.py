@@ -294,11 +294,17 @@ def _typesafe_required_error() -> str | None:
         return None
     if _typesafe_key() or _typesafe_opt_out():
         return None
+    path = _key_file_path()
+    directory = os.path.dirname(path) or "~"
     return (
-        "TYPESAFE_API_KEY is required by this plugin but is not set. Store it "
-        f"once with `python3 <server.py> --set-key` (writes {_key_file_path()}, "
-        "0600), or set TYPESAFE_API_KEY in the environment, or set "
-        "JEV_PROVIDER=opencode to use the OpenCode Zen relay instead."
+        "TYPESAFE_API_KEY is required by this plugin but is not set. Create the "
+        f"credential file in one line:\n"
+        f"  mkdir -p {directory} && printf '%s\\n' \"$TYPESAFE_API_KEY\" > {path}"
+        f" && chmod 600 {path}\n"
+        "(`none` instead of a key selects the free OpenCode Zen relay.) The "
+        "installed server can also prompt for it: `python3 <server.py> "
+        "--set-key`, where the path comes from `codex mcp get jev`. Or set "
+        "JEV_PROVIDER=opencode to opt out of TypeSafe entirely."
     )
 
 
