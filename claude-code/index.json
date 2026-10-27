@@ -1,5 +1,5 @@
 [
-  { "name": "jev-skill-gate", "trigger": "before responding, check the skills index is under 2.5 KB; prune at install/config level, then start a fresh scoped session", "file": "../skills/jev-skill-gate/SKILL.md" },
+  { "name": "jev-skill-gate", "trigger": "before responding, pick the skills the task actually needs and report the index cost; prune at install/config level when over 2.5 KB", "file": "../skills/jev-skill-gate/SKILL.md" },
   { "name": "jev-context-economy", "trigger": "per-call token hygiene: batch calls, grep-then-read, cap output, compress at boundaries", "file": "../skills/jev-context-economy/SKILL.md" },
   { "name": "jev-prompt-budget-audit", "trigger": "audit fixed prompt cost; cut one toolset/skill; re-measure under budget", "file": "../skills/jev-prompt-budget-audit/SKILL.md" },
   { "name": "jev-context-firewall", "trigger": "push bulk extraction/analysis off the main context; only digests return", "file": "../skills/jev-context-firewall/SKILL.md" },

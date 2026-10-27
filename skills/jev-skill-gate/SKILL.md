@@ -1,6 +1,6 @@
 ---
 name: jev-skill-gate
-description: "Trim the skills index to only what the task needs; keep the fixed prompt budget under 2.5 KB."
+description: "Use when choosing which skills a turn needs. Load what fits the task, cut the rest, keep the index under 2.5 KB."
 version: 1.1.0
 author: ronail/jev-cost-guard
 license: MIT

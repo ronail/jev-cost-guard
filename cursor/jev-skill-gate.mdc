@@ -1,5 +1,5 @@
 ---
-description: jev-skill-gate — keep the skills index under 2.5 KB by pruning at config level
+description: jev-skill-gate — load the skills a turn needs, prune the rest, keep the index under 2.5 KB
 globs: ["**/*"]
 ---
 
