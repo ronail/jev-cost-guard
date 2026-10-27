@@ -4,8 +4,7 @@
     "jev": {
       "type": "stdio",
       "command": "python3",
-      "args": ["${PLUGIN_ROOT}/mcp/jev/server.py"],
-      "env_vars": ["TYPESAFE_API_KEY", "OPENCODE_ZEN_API_KEY", "JEV_PROVIDER", "JEV_REQUIRE_TYPESAFE"]
+      "args": ["${PLUGIN_ROOT}/mcp/jev/server.py"]
     }
   }
 }
