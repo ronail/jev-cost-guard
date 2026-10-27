@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" width="1200" height="600"
+     role="img" aria-label="jev cost guard">
+  <title>jev cost guard — token-economy guard for agent context</title>
+  <rect width="1200" height="600" fill="#10A37F"/>
+  <circle cx="1080" cy="40" r="260" fill="#0C8A6B" opacity="0.45"/>
+  <circle cx="110" cy="570" r="200" fill="#0C8A6B" opacity="0.35"/>
+  <g transform="translate(250 300) scale(0.62) translate(-256 -256)">
+    <path d="M134 84 H378 A26 26 0 0 1 404 110 V274 C404 360 332 416 256 442 C180 416 108 360 108 274 V110 A26 26 0 0 1 134 84 Z" fill="#FFFFFF"/>
+    <g transform="translate(34 13)"><path d="M282 156 V296 A48 48 0 0 1 186 296" stroke="#10A37F" stroke-width="50" stroke-linecap="round" fill="none"/><circle cx="186" cy="296" r="48" fill="#10A37F"/><circle cx="186" cy="296" r="20" fill="#FFFFFF"/></g>
+  </g>
+  <g font-family="Helvetica Neue, Helvetica, Arial, sans-serif" fill="#FFFFFF">
+    <text x="424" y="286" font-size="94" font-weight="700" letter-spacing="-2">jev cost guard</text>
+    <text x="428" y="348" font-size="32" opacity="0.88">Token-economy guard for agent context</text>
+    <text x="428" y="404" font-size="26" opacity="0.72" letter-spacing="1.2">MCP · HERMES · CLAUDE CODE · CODEX</text>
+  </g>
+</svg>
