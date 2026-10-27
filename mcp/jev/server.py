@@ -234,14 +234,35 @@ def _clean_key(value: str | None) -> str | None:
 
 _TYPESAFE_OFF = frozenset({"none", "public", "-", "off", "0", "skip"})
 
+_DEFAULT_KEY_FILE = "~/.config/jev/api_key"
+
+
+def _key_file_path() -> str:
+    """Credential file location (`JEV_API_KEY_FILE` overrides the default)."""
+    return os.path.expanduser(os.environ.get("JEV_API_KEY_FILE") or _DEFAULT_KEY_FILE)
+
+
+def _key_from_file() -> str | None:
+    """Usable key from the credential file, or None.
+
+    Codex scrubs the environment of the stdio servers it spawns and cannot
+    expand `${VAR}` in a plugin manifest, so a file the user owns is the only
+    way a plugin-provided server can hold a credential.
+    """
+    try:
+        with open(_key_file_path(), "r", encoding="utf-8") as fh:
+            return _clean_key(fh.read(4096))
+    except OSError:
+        return None
+
 _ZEN_PROVIDERS = frozenset({"opencode", "zen", "opencode-zen", "zen-relay"})
 
 
 def _typesafe_opt_out() -> bool:
     """True when the caller explicitly asked for the Zen relay."""
-    raw = (os.environ.get("TYPESAFE_API_KEY") or "").strip().lower()
-    if raw in _TYPESAFE_OFF:
-        return True
+    for raw in (os.environ.get("TYPESAFE_API_KEY"), _key_from_file()):
+        if (raw or "").strip().lower() in _TYPESAFE_OFF:
+            return True
     return (os.environ.get("JEV_PROVIDER") or "").strip().lower() in _ZEN_PROVIDERS
 
 
@@ -274,15 +295,19 @@ def _typesafe_required_error() -> str | None:
     if _typesafe_key() or _typesafe_opt_out():
         return None
     return (
-        "TYPESAFE_API_KEY is required by this plugin but is not set. Provide it "
-        "in the environment (e.g. export TYPESAFE_API_KEY=... in the shell or in "
-        "the MCP server's env block), or set JEV_PROVIDER=opencode to use the "
-        "OpenCode Zen relay instead."
+        "TYPESAFE_API_KEY is required by this plugin but is not set. Store it "
+        f"once with `python3 <server.py> --set-key` (writes {_key_file_path()}, "
+        "0600), or set TYPESAFE_API_KEY in the environment, or set "
+        "JEV_PROVIDER=opencode to use the OpenCode Zen relay instead."
     )
 
 
 def _typesafe_key() -> str | None:
-    """TYPESAFE_API_KEY from the environment, else from the profile .env.
+    """TYPESAFE_API_KEY from the environment, the credential file, else profile .env.
+
+    Order matters for Codex: the host scrubs the environment of stdio servers it
+    spawns, so `~/.config/jev/api_key` (written by `--set-key`, 0600) is the path
+    that actually works for a plugin-provided server.
 
     A required `typesafe_api_key` in a plugin manifest has to accept some value
     even for Zen-only users, so the sentinels above mean "not using TypeSafe"
@@ -291,7 +316,12 @@ def _typesafe_key() -> str | None:
     value = _clean_key(os.environ.get("TYPESAFE_API_KEY"))
     if value and value.strip().lower() in _TYPESAFE_OFF:
         value = None
-    return value or _load_profile_env_key(names=_TYPESAFE_KEY_NAMES)
+    if value:
+        return value
+    file_value = _key_from_file()
+    if file_value:
+        return None if file_value.strip().lower() in _TYPESAFE_OFF else file_value
+    return _load_profile_env_key(names=_TYPESAFE_KEY_NAMES)
 
 
 def _resolve_jev_target() -> tuple[str, str, str | None]:
@@ -1281,9 +1311,83 @@ def _cli_verdict() -> None:
                       "noul": n, "interpretation": interp}))
 
 
+def _cli_set_key(argv: list[str]) -> None:
+    """Store the TypeSafe key in the credential file (0600).
+
+    Prompts with hidden input when no value is given, so the key never lands in
+    shell history or in a process listing.
+    """
+    path = _key_file_path()
+    value = argv[0] if argv else ""
+    if not value:
+        try:
+            import getpass
+            value = getpass.getpass(
+                "TypeSafe API key (or 'none' for the free Zen relay): "
+            )
+        except (EOFError, KeyboardInterrupt):
+            print(json.dumps({"ok": False, "error": "no key entered"}))
+            return
+    value = value.strip()
+    if not value:
+        print(json.dumps({"ok": False, "error": "empty key; nothing written"}))
+        return
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(value + "\n")
+    os.chmod(path, 0o600)
+    print(json.dumps({
+        "ok": True,
+        "path": path,
+        "mode": oct(os.stat(path).st_mode)[-3:],
+        "relay_only": value.lower() in _TYPESAFE_OFF,
+    }))
+
+
+def _cli_key_status() -> None:
+    """Where the key is coming from, and which endpoint that selects."""
+    path = _key_file_path()
+    if _clean_key(os.environ.get("TYPESAFE_API_KEY")):
+        source = "env:TYPESAFE_API_KEY"
+    elif _key_from_file():
+        source = f"file:{path}"
+    elif _load_profile_env_key(names=_TYPESAFE_KEY_NAMES):
+        source = "hermes-profile"
+    else:
+        source = None
+    endpoint, model, _ = _resolve_jev_target()
+    print(json.dumps({
+        "key_source": source,
+        "key_file": path,
+        "key_file_exists": os.path.exists(path),
+        "provider": _provider_for(endpoint),
+        "endpoint": endpoint,
+        "model": model,
+        "required_here": _require_typesafe_flag(),
+        "relay_only": _typesafe_opt_out(),
+    }))
+
+
+def _cli_clear_key() -> None:
+    path = _key_file_path()
+    try:
+        os.unlink(path)
+        print(json.dumps({"ok": True, "removed": path}))
+    except FileNotFoundError:
+        print(json.dumps({"ok": True, "removed": None, "note": "no key file"}))
+
+
 if __name__ == "__main__":
     _a = sys.argv[1:]
     if _a and _a[0] in ("--verdict", "-v"):
         _cli_verdict()
+    elif _a and _a[0] == "--set-key":
+        _cli_set_key(_a[1:])
+    elif _a and _a[0] == "--key-status":
+        _cli_key_status()
+    elif _a and _a[0] == "--clear-key":
+        _cli_clear_key()
     else:
         main()

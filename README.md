@@ -428,41 +428,46 @@ Two caveats for the desktop app: re-saving the server from that page can drop ha
 (re-paste them if the key stops working), and GUI-launched apps do not read your shell profile, so
 `env_vars` forwarding is unreliable there — set the value inline. Verify with `codex mcp get jev`.
 
-**The TypeSafe key is required.** Codex has no plugin configuration dialog — its binary
-carries no `userConfig`, `CLAUDE_PLUGIN_OPTION_*`, or `pluginConfigs` — so the requirement is
+The TypeSafe key is required on every host, but Codex has no plugin configuration dialog — its
+binary carries no `userConfig`, `CLAUDE_PLUGIN_OPTION_*`, or `pluginConfigs` — so the requirement is
 enforced by the server at runtime instead. Without a key every jev tool returns:
 
 ```text
-TYPESAFE_API_KEY is required by this plugin but is not set. Provide it in the environment …
+TYPESAFE_API_KEY is required by this plugin but is not set. Store it once with
+`python3 <server.py> --set-key` (writes ~/.config/jev/api_key, 0600), …
 ```
 
-Codex also **scrubs** the environment it hands to stdio MCP servers: a server spawned by
-`codex exec` sees only `HOME`, `PATH`, `SHELL`, `TMPDIR`, `USER`, `LOGNAME`, `LC_CTYPE`,
-`__CF_USER_TEXT_ENCODING`. A bare `export TYPESAFE_API_KEY=…` therefore never reaches jev. The
-key has to be declared for the server in `~/.codex/config.toml`:
+**Store the key once.** The server resolves, in order: `TYPESAFE_API_KEY` → `~/.config/jev/api_key`
+→ Hermes profile `.env` → keyless relay.
 
-```toml
-[mcp_servers.jev]
-command = "python3"
-args = ["<repo>/mcp/jev/server.py"]
-env_vars = ["TYPESAFE_API_KEY"]          # forward from Codex's own environment
-
-[mcp_servers.jev.env]
-JEV_REQUIRE_TYPESAFE = "1"
+```sh
+python3 <repo>/mcp/jev/server.py --set-key      # hidden prompt, writes the file 0600
+python3 <repo>/mcp/jev/server.py --key-status   # which source is in use, and the endpoint it selects
+python3 <repo>/mcp/jev/server.py --clear-key
 ```
 
-Then export the key in whatever launches Codex (`export TYPESAFE_API_KEY=ts-…`), or skip
-`env_vars` and set the value inline:
+The file is what makes this work on Codex: Codex **scrubs** the environment it hands to stdio MCP
+servers (a spawned server sees only `HOME`, `PATH`, `SHELL`, `TMPDIR`, `USER`, `LOGNAME`, `LC_CTYPE`,
+`__CF_USER_TEXT_ENCODING`), so a bare `export TYPESAFE_API_KEY=…` never arrives. A file the server
+opens itself does. `--set-key none` writes the sentinel that selects the free Zen relay.
+
+If you prefer Codex to own the credential instead, both of these also work:
 
 ```toml
-[mcp_servers.jev.env]
+[mcp_servers.jev.env]                    # inline value
 TYPESAFE_API_KEY = "ts-…"
 JEV_REQUIRE_TYPESAFE = "1"
 ```
 
+```toml
+[mcp_servers.jev]                        # or forward from the shell that launches Codex
+command = "python3"
+args = ["<repo>/mcp/jev/server.py"]
+env_vars = ["TYPESAFE_API_KEY"]
+```
+
 `env_vars` is Codex's documented "allow and forward" list — verified: the value arrives in the
-spawned server's environment, while unlisted variables do not. `codex mcp get jev` shows the
-resolved command and the forwarded names.
+spawned server's environment while unlisted variables do not.
 
 To use the OpenCode Zen relay instead, opt out explicitly:
 
