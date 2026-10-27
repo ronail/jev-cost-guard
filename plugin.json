@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "jev-cost-guard",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Portable jev context-economy plugin: the jev decision MCP (jev_health, jev_summarize, jev_find, jev_screen) plus the jev-* skills, installed as one package for Hermes, Claude Code, and Codex.",
   "author": { "name": "ronail" },
   "homepage": "https://github.com/ronail/jev-cost-guard",

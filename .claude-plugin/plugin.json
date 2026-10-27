@@ -1,7 +1,7 @@
 {
   "name": "jev-cost-guard",
   "displayName": "jev cost guard",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Token-economy guard: jev decision-model MCP tools (jev_health, jev_summarize, jev_find, jev_screen), the jev-* skills, and a PostToolUse soft gate.",
   "author": {
     "name": "ronail"
@@ -9,8 +9,14 @@
   "homepage": "https://github.com/ronail/jev-cost-guard",
   "repository": "https://github.com/ronail/jev-cost-guard",
   "license": "MIT",
-  "keywords": ["jev", "typesafe", "context", "tokens", "mcp", "skills"],
-  "icon": "./assets/icon.png",
+  "keywords": [
+    "jev",
+    "typesafe",
+    "context",
+    "tokens",
+    "mcp",
+    "skills"
+  ],
   "defaultEnabled": true,
   "userConfig": {
     "typesafe_api_key": {
