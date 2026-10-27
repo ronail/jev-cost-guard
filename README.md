@@ -55,6 +55,29 @@ is accepted.
 
 Add the ones you want to each profile's `skills.auto_load` in `config.yaml`.
 
+#### Harness-neutral by design
+
+The skills are shipped to Hermes, Claude Code and Codex unchanged, so they never
+name one runtime's CLI as a requirement. Each step is a **capability** ("measure
+the fixed prompt", "run code and print only the aggregate"), and the concrete
+tool/command per runtime lives in one table:
+[`docs/harness-adapters.md`](docs/harness-adapters.md).
+
+Two rules the whole bundle follows:
+
+- **Never drive another harness's CLI or state.** A Codex session does not run
+  `hermes`; a Hermes session does not run `codex`. Another runtime's install lock,
+  profile config and databases are not yours to open — a step that needs one is a
+  misconfiguration, not a "blocked audit".
+- **Degrade, never block.** Where a harness has no native measurement, the skills
+  fall back to a portable estimator and label the result an estimate, instead of
+  reporting that nothing could be measured.
+
+```sh
+python3 scripts/prompt_budget.py --harness auto      # per-skill index cost, no CLI/lock/network
+python3 scripts/check_harness_agnostic.py            # guards the invariant above in every skill
+```
+
 ### MCP tools
 
 A zero-dependency (pure stdlib, no pip) MCP server exposing four tools. It talks to
@@ -202,7 +225,10 @@ faster it pays off. No other model is involved.
 |---|---|
 | `plugin.json` | portable plugin manifest (Agent Plugins 1.0.0) |
 | `mcp.json` | portable MCP declaration — `${PLUGIN_ROOT}/mcp/jev/server.py`, `JEV_MCP=1` |
-| `skills/` | the `jev-*` Hermes skills (auto-discovered, one SKILL.md per dir) |
+| `skills/` | the `jev-*` skills (auto-discovered, one SKILL.md per dir), harness-neutral |
+| `docs/harness-adapters.md` | capability → tool/command map for Hermes / Claude Code / Codex, plus the no-cross-harness rule |
+| `scripts/prompt_budget.py` | portable fixed-prompt / skills-index estimator (no harness CLI, no lock, no network) |
+| `scripts/check_harness_agnostic.py` | guard: no skill may present another runtime's CLI as an unscoped requirement |
 | `mcp/jev/server.py` | the one jev implementation: MCP stdio server (dual-frame) + `--verdict` CLI; owns provider selection (TypeSafe / OpenCode Zen) and every fallback |
 | `mcp/jev/env.example` | env reference: TypeSafe + Zen auth, fallback knobs, failure modes |
 | `hooks/claude-codex-jev-verdict.py` | standalone soft-gate hook for Claude Code / Codex |
@@ -351,6 +377,12 @@ codex mcp list        # jev -> mcp/jev/server.py
 That brings in the four jev MCP tools, the eight `jev-*` skills (`skills/`), and the
 `PostToolUse` gate (`hooks/hooks.json`).
 
+The plugin manifest deliberately carries **no** `env_vars` and no `${…}` placeholders: Codex
+validates the portable `mcp.json` against the plugin schema, and an `env_vars` key there makes it
+drop the whole server silently (plugin installs, skills work, `codex mcp list` stays empty). It
+also does not expand `${VAR}` inside a manifest `env` block — a placeholder arrives as a literal
+string. Keys therefore belong in `~/.codex/config.toml`, as below.
+
 #### Codex desktop app: Settings → Integrations → Plugins → MCPs
 
 The ChatGPT desktop app, Codex CLI, and the IDE extension share one MCP configuration, and that
@@ -424,6 +456,10 @@ overrides it either way.
 > `codex exec` 0.153.4 does not surface stdio MCP tools in the model's tool list — even for an
 > explicitly registered server. Register the server as above and check `codex mcp list` /
 > `codex mcp get jev`; the tools themselves are host-dependent.
+>
+> The skills themselves never shell out to `hermes`: measurement, pruning and scratch dirs
+> all have a Codex-native path (see `docs/harness-adapters.md`), so a Codex session reports an
+> estimate from `scripts/prompt_budget.py` rather than a locked-out audit.
 
 Manual registration without the plugin still works:
 
