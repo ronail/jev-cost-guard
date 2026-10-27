@@ -351,17 +351,18 @@ codex mcp list        # jev -> mcp/jev/server.py
 That brings in the four jev MCP tools, the eight `jev-*` skills (`skills/`), and the
 `PostToolUse` gate (`hooks/hooks.json`).
 
-#### Codex desktop app: Settings → MCP servers
+#### Codex desktop app: Settings → Integrations → Plugins → MCPs
 
-The ChatGPT desktop app, Codex CLI, and the IDE extension share one MCP configuration, and the
-**Settings → MCP servers** page is just a form over `[mcp_servers.*]` in `~/.codex/config.toml`.
+The ChatGPT desktop app, Codex CLI, and the IDE extension share one MCP configuration, and that
+page is a form over `[mcp_servers.*]` in `~/.codex/config.toml`.
 
-1. **Settings → MCP servers → Add server**
-2. Name `jev`, transport **STDIO**, command `python3`, argument `<repo>/mcp/jev/server.py`
-3. **Save**, then **Restart**
+1. **Settings → Integrations → Plugins → MCPs**
+2. Add a server: name `jev`, transport **STDIO**, command `python3`,
+   argument `<repo>/mcp/jev/server.py`
+3. Add the environment variables `TYPESAFE_API_KEY` (your key) and `JEV_REQUIRE_TYPESAFE` (`1`)
+4. **Restart**
 
-The form only covers name, transport, command and URL — there is no env editor — so put the key
-in the same file as a table and restart again:
+If that form has no env section, add the table to the same file and restart:
 
 ```toml
 [mcp_servers.jev.env]
