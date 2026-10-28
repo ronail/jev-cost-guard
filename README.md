@@ -434,17 +434,25 @@ enforced by the server at runtime instead. Without a key every jev tool returns:
 
 ```text
 TYPESAFE_API_KEY is required by this plugin but is not set. Store it once with
-`python3 <server.py> --set-key` (writes ~/.config/jev/api_key, 0600), …
+`python3 <server.py> --set-key` (writes the credential file, 0600), …
 ```
 
-**Store the key once.** The server resolves, in order: `TYPESAFE_API_KEY` → `~/.config/jev/api_key`
-→ Hermes profile `.env` → keyless relay. Write the file directly — no repo or plugin path needed:
+**Store the key once.** The server resolves, in order: `TYPESAFE_API_KEY` → `JEV_API_KEY_FILE` →
+`$PLUGIN_DATA/api_key` → Hermes profile `.env` → keyless relay.
 
-```sh
-mkdir -p ~/.config/jev
-printf '%s\n' "ts-…" > ~/.config/jev/api_key     # or the word none for the free Zen relay
-chmod 600 ~/.config/jev/api_key
-```
+`PLUGIN_DATA` is the directory every host hands a plugin subprocess (Agent Plugins spec §9.1): a
+per-plugin, client-managed data directory that survives plugin updates. It is the only place this
+package writes a credential, because it makes the file **attributable** — it sits under the
+application that created it:
+
+| Where | File |
+| --- | --- |
+| Codex | `~/.codex/plugins/data/jev-cost-guard-jev-cost-guard/api_key` |
+| a caller with no `PLUGIN_DATA` (hook, bare CLI) | name one with `--path`, or set `JEV_API_KEY_FILE` |
+
+There is no global fallback on purpose. A key at `~/.config/jev/api_key` is owned by nobody an
+operator can name, so this version never creates or reads one: if a file from an older install is
+still on disk, `--key-status` reports it as `legacy_file` and `--clear-key` deletes it.
 
 That is the part that makes Codex work: Codex **scrubs** the environment it hands to stdio MCP
 servers (a spawned server sees only `HOME`, `PATH`, `SHELL`, `TMPDIR`, `USER`, `LOGNAME`, `LC_CTYPE`,
@@ -455,12 +463,19 @@ The installed server can do the same for you, if you'd rather not echo the key:
 
 ```sh
 codex mcp get jev      # prints the installed server path in its args
-python3 ~/.codex/plugins/cache/jev-cost-guard/jev-cost-guard/<version>/mcp/jev/server.py --set-key
-python3 ~/.codex/plugins/cache/jev-cost-guard/jev-cost-guard/<version>/mcp/jev/server.py --key-status
+
+# a host-launched run already has PLUGIN_DATA; passing it makes the CLI behave the same
+PLUGIN_DATA=~/.codex/plugins/data/jev-cost-guard-jev-cost-guard \
+  python3 ~/.codex/plugins/cache/jev-cost-guard/jev-cost-guard/<version>/mcp/jev/server.py --set-key
+
+# no owner directory in this process? name the file yourself, under the app that should own it
+python3 <server.py> --set-key --path ~/.codex/jev/api_key
 ```
 
-`--set-key` prompts with hidden input and writes the file `0600`; `--key-status` reports which
-source is in use and the endpoint and model it selects; `--clear-key` removes it.
+`--set-key` prompts with hidden input and writes the file `0600` — and refuses when it cannot name
+an owner; `--key-status` reports the key source, the candidate files, any legacy file, and the
+endpoint and model that selection produces; `--clear-key` removes every candidate plus a legacy
+file.
 
 If you prefer Codex to own the credential instead, both of these also work:
 
