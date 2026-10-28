@@ -234,26 +234,69 @@ def _clean_key(value: str | None) -> str | None:
 
 _TYPESAFE_OFF = frozenset({"none", "public", "-", "off", "0", "skip"})
 
-_DEFAULT_KEY_FILE = "~/.config/jev/api_key"
+_PLUGIN_DATA_KEY_FILE = "api_key"
+# Location the pre-PLUGIN_DATA versions wrote to. Never created any more: the
+# path named the tool, not the application that owned the credential, so nothing
+# on disk could be attributed to the host that put it there. Kept only so a
+# legacy file can be reported and migrated.
+_LEGACY_KEY_FILE = "~/.config/jev/api_key"
 
 
-def _key_file_path() -> str:
-    """Credential file location (`JEV_API_KEY_FILE` overrides the default)."""
-    return os.path.expanduser(os.environ.get("JEV_API_KEY_FILE") or _DEFAULT_KEY_FILE)
+def _key_file_candidates() -> list[str]:
+    """Credential files to read, owner-named first.
+
+    `JEV_API_KEY_FILE` wins outright. Otherwise the host-provided `PLUGIN_DATA`
+    directory (Agent Plugins spec §9.1: client-managed, per-plugin, preserved
+    across plugin updates), which is what makes the file attributable — it sits
+    under the application that created it.
+
+    There is deliberately **no global fallback**. A credential at
+    `~/.config/jev/api_key` is owned by nobody an operator can name, so this
+    package does not create one; `_legacy_key_file()` only notices an existing
+    file so it can be moved.
+    """
+    explicit = os.environ.get("JEV_API_KEY_FILE")
+    if explicit:
+        return [os.path.expanduser(explicit)]
+    data_dir = (os.environ.get("PLUGIN_DATA") or "").strip()
+    if data_dir:
+        return [os.path.join(os.path.expanduser(data_dir), _PLUGIN_DATA_KEY_FILE)]
+    return []
+
+
+def _key_file_path() -> str | None:
+    """Where `--set-key` writes, or None when no owner can be named."""
+    candidates = _key_file_candidates()
+    return candidates[0] if candidates else None
+
+
+def _legacy_key_file() -> str | None:
+    """A pre-0.6.3 unattributable key file, when one is still on disk."""
+    path = os.path.expanduser(_LEGACY_KEY_FILE)
+    return path if os.path.isfile(path) else None
+
+
+def _read_key_file() -> tuple[str | None, str | None]:
+    """(usable key, path) from the first candidate that holds one."""
+    for path in _key_file_candidates():
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                value = _clean_key(fh.read(4096))
+        except OSError:
+            continue
+        if value:
+            return value, path
+    return None, None
 
 
 def _key_from_file() -> str | None:
-    """Usable key from the credential file, or None.
+    """Usable key from a credential file, or None.
 
     Codex scrubs the environment of the stdio servers it spawns and cannot
-    expand `${VAR}` in a plugin manifest, so a file the user owns is the only
-    way a plugin-provided server can hold a credential.
+    expand `${VAR}` in a plugin manifest, so a file the server opens itself is
+    the only way a plugin-provided server can hold a credential.
     """
-    try:
-        with open(_key_file_path(), "r", encoding="utf-8") as fh:
-            return _clean_key(fh.read(4096))
-    except OSError:
-        return None
+    return _read_key_file()[0]
 
 _ZEN_PROVIDERS = frozenset({"opencode", "zen", "opencode-zen", "zen-relay"})
 
@@ -295,13 +338,25 @@ def _typesafe_required_error() -> str | None:
     if _typesafe_key() or _typesafe_opt_out():
         return None
     path = _key_file_path()
-    directory = os.path.dirname(path) or "~"
+    if path:
+        directory = os.path.dirname(path) or "~"
+        where = (
+            "Create the credential file in one line:\n"
+            f"  mkdir -p {directory} && printf '%s\\n' \"$TYPESAFE_API_KEY\" > {path}"
+            f" && chmod 600 {path}\n"
+        )
+    else:
+        where = (
+            "This process was launched without a host-provided PLUGIN_DATA, so "
+            "there is no owner directory to write into. Start it from the host, "
+            "or name the file yourself:\n"
+            "  python3 <server.py> --set-key --path <file>\n"
+            "  (equivalently: set JEV_API_KEY_FILE for the server process)\n"
+        )
     return (
-        "TYPESAFE_API_KEY is required by this plugin but is not set. Create the "
-        f"credential file in one line:\n"
-        f"  mkdir -p {directory} && printf '%s\\n' \"$TYPESAFE_API_KEY\" > {path}"
-        f" && chmod 600 {path}\n"
-        "(`none` instead of a key selects the free OpenCode Zen relay.) The "
+        "TYPESAFE_API_KEY is required by this plugin but is not set. "
+        + where
+        + "(`none` instead of a key selects the free OpenCode Zen relay.) The "
         "installed server can also prompt for it: `python3 <server.py> "
         "--set-key`, where the path comes from `codex mcp get jev`. Or set "
         "JEV_PROVIDER=opencode to opt out of TypeSafe entirely."
@@ -312,8 +367,10 @@ def _typesafe_key() -> str | None:
     """TYPESAFE_API_KEY from the environment, the credential file, else profile .env.
 
     Order matters for Codex: the host scrubs the environment of stdio servers it
-    spawns, so `~/.config/jev/api_key` (written by `--set-key`, 0600) is the path
-    that actually works for a plugin-provided server.
+    spawns, so the credential file (written by `--set-key`, 0600) is the path
+    that actually works for a plugin-provided server. It resolves inside the
+    host's `PLUGIN_DATA` directory when the host provides one, so the file is
+    attributable to the application that created it.
 
     A required `typesafe_api_key` in a plugin manifest has to accept some value
     even for Zen-only users, so the sentinels above mean "not using TypeSafe"
@@ -1321,10 +1378,32 @@ def _cli_set_key(argv: list[str]) -> None:
     """Store the TypeSafe key in the credential file (0600).
 
     Prompts with hidden input when no value is given, so the key never lands in
-    shell history or in a process listing.
+    shell history or in a process listing. The destination is the host's
+    `PLUGIN_DATA` directory; `--path` names one explicitly when the process was
+    not started by a host, and nothing is written if neither is available — a
+    credential file has to belong to an owner.
     """
-    path = _key_file_path()
-    value = argv[0] if argv else ""
+    explicit = None
+    words: list[str] = []
+    i = 0
+    while i < len(argv):
+        if argv[i] in ("--path", "-p") and i + 1 < len(argv):
+            explicit = argv[i + 1]
+            i += 2
+            continue
+        words.append(argv[i])
+        i += 1
+    path = explicit or _key_file_path()
+    if not path:
+        print(json.dumps({
+            "ok": False,
+            "error": "no credential file to write: this process has no "
+                     "PLUGIN_DATA, so no owner can be named. Pass "
+                     "--path <file> or set JEV_API_KEY_FILE.",
+            "legacy_file": _legacy_key_file(),
+        }))
+        return
+    value = words[0] if words else ""
     if not value:
         try:
             import getpass
@@ -1338,6 +1417,7 @@ def _cli_set_key(argv: list[str]) -> None:
     if not value:
         print(json.dumps({"ok": False, "error": "empty key; nothing written"}))
         return
+    path = os.path.expanduser(path)
     directory = os.path.dirname(path) or "."
     os.makedirs(directory, mode=0o700, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -1354,20 +1434,23 @@ def _cli_set_key(argv: list[str]) -> None:
 
 def _cli_key_status() -> None:
     """Where the key is coming from, and which endpoint that selects."""
-    path = _key_file_path()
+    file_value, file_path = _read_key_file()
     if _clean_key(os.environ.get("TYPESAFE_API_KEY")):
         source = "env:TYPESAFE_API_KEY"
-    elif _key_from_file():
-        source = f"file:{path}"
+    elif file_value:
+        source = f"file:{file_path}"
     elif _load_profile_env_key(names=_TYPESAFE_KEY_NAMES):
         source = "hermes-profile"
     else:
         source = None
     endpoint, model, _ = _resolve_jev_target()
+    path = _key_file_path()
     print(json.dumps({
         "key_source": source,
         "key_file": path,
-        "key_file_exists": os.path.exists(path),
+        "key_file_exists": bool(path and os.path.exists(path)),
+        "key_file_candidates": _key_file_candidates(),
+        "legacy_file": _legacy_key_file(),
         "provider": _provider_for(endpoint),
         "endpoint": endpoint,
         "model": model,
@@ -1377,12 +1460,22 @@ def _cli_key_status() -> None:
 
 
 def _cli_clear_key() -> None:
-    path = _key_file_path()
-    try:
-        os.unlink(path)
-        print(json.dumps({"ok": True, "removed": path}))
-    except FileNotFoundError:
-        print(json.dumps({"ok": True, "removed": None, "note": "no key file"}))
+    paths = list(_key_file_candidates())
+    legacy = _legacy_key_file()
+    if legacy:
+        paths.append(legacy)
+    removed = []
+    for path in paths:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            continue
+        removed.append(path)
+    print(json.dumps({
+        "ok": True,
+        "removed": removed[0] if removed else None,
+        "removed_files": removed,
+    }))
 
 
 if __name__ == "__main__":

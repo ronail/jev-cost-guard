@@ -7,6 +7,7 @@ reads itself.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import stat
 from pathlib import Path
@@ -27,6 +28,7 @@ _CLEARED = (
     "JEV_PROFILE",
     "JEV_MCP",
     "PLUGIN_ROOT",
+    "PLUGIN_DATA",
     "CLAUDE_PLUGIN_ROOT",
 )
 
@@ -110,4 +112,116 @@ def test_clear_key_removes_file(srv):
     _write(srv, "ts-abc\n")
     srv._cli_clear_key()
     assert not Path(srv._key_file_path()).exists()
+    assert srv._typesafe_key() is None
+
+
+def test_plugin_data_is_the_write_target(srv, monkeypatch, tmp_path):
+    """A plugin-launched server stores the key where its host owns the dir."""
+    monkeypatch.delenv("JEV_API_KEY_FILE", raising=False)
+    monkeypatch.setenv("PLUGIN_DATA", str(tmp_path / "plugin-data"))
+    path = Path(srv._key_file_path())
+    assert path == tmp_path / "plugin-data" / "api_key"
+    srv._cli_set_key(["ts-plugin"])
+    assert path.read_text().strip() == "ts-plugin"
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert srv._typesafe_key() == "ts-plugin"
+
+
+def test_plugin_data_is_the_only_candidate(srv, monkeypatch, tmp_path):
+    monkeypatch.delenv("JEV_API_KEY_FILE", raising=False)
+    monkeypatch.setenv("PLUGIN_DATA", str(tmp_path / "plugin-data"))
+    (tmp_path / "plugin-data").mkdir()
+    (tmp_path / "plugin-data" / "api_key").write_text("plugin-key\n")
+    assert srv._key_file_candidates() == [str(tmp_path / "plugin-data" / "api_key")]
+    assert srv._typesafe_key() == "plugin-key"
+
+
+def test_no_global_fallback_when_owner_is_unknown(srv, monkeypatch):
+    """No PLUGIN_DATA and no explicit path means no file exists to read."""
+    monkeypatch.delenv("JEV_API_KEY_FILE", raising=False)
+    assert srv._key_file_candidates() == []
+    assert srv._key_file_path() is None
+    assert srv._typesafe_key() is None
+
+
+def test_legacy_xdg_file_is_reported_but_never_read(srv, monkeypatch, tmp_path):
+    """A pre-0.6.3 ~/.config file is surfaced for migration, not trusted."""
+    monkeypatch.delenv("JEV_API_KEY_FILE", raising=False)
+    monkeypatch.setattr(srv, "_LEGACY_KEY_FILE", str(tmp_path / "legacy" / "api_key"))
+    (tmp_path / "legacy").mkdir()
+    (tmp_path / "legacy" / "api_key").write_text("legacy-key\n")
+    assert srv._legacy_key_file() == str(tmp_path / "legacy" / "api_key")
+    assert srv._key_file_candidates() == []
+    assert srv._typesafe_key() is None
+
+
+def test_explicit_key_file_beats_plugin_data(srv, monkeypatch, tmp_path):
+    monkeypatch.setenv("PLUGIN_DATA", str(tmp_path / "plugin-data"))
+    monkeypatch.setenv("JEV_API_KEY_FILE", str(tmp_path / "explicit"))
+    assert srv._key_file_candidates() == [str(tmp_path / "explicit")]
+
+
+def test_set_key_refuses_without_an_owner(srv, monkeypatch, capsys):
+    monkeypatch.delenv("JEV_API_KEY_FILE", raising=False)
+    srv._cli_set_key(["ts-abc"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert "PLUGIN_DATA" in out["error"]
+    assert "--path" in out["error"]
+
+
+def test_set_key_path_flag_names_the_file(srv, monkeypatch, capsys, tmp_path):
+    monkeypatch.delenv("JEV_API_KEY_FILE", raising=False)
+    target = tmp_path / "explicit" / "api_key"
+    srv._cli_set_key(["--path", str(target), "ts-explicit"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True and out["path"] == str(target)
+    assert target.read_text().strip() == "ts-explicit"
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+
+
+def test_codex_error_points_at_plugin_data_path(srv, monkeypatch, tmp_path):
+    monkeypatch.delenv("JEV_API_KEY_FILE", raising=False)
+    monkeypatch.setenv("PLUGIN_DATA", str(tmp_path / "plugin-data"))
+    monkeypatch.setenv("PLUGIN_ROOT", "/plugin")
+    message = srv._typesafe_required_error()
+    assert message is not None
+    assert str(tmp_path / "plugin-data" / "api_key") in message
+    assert "--set-key" in message
+
+
+def test_error_without_owner_asks_for_a_path(srv, monkeypatch):
+    monkeypatch.delenv("JEV_API_KEY_FILE", raising=False)
+    monkeypatch.setenv("PLUGIN_ROOT", "/plugin")
+    message = srv._typesafe_required_error()
+    assert message is not None
+    assert "PLUGIN_DATA" in message
+    assert "--path" in message
+    assert "~/.config" not in message
+
+
+def test_key_status_reports_candidates_and_source(srv, monkeypatch, capsys, tmp_path):
+    monkeypatch.delenv("JEV_API_KEY_FILE", raising=False)
+    monkeypatch.setenv("PLUGIN_DATA", str(tmp_path / "plugin-data"))
+    srv._cli_set_key(["ts-status"])
+    capsys.readouterr()
+    srv._cli_key_status()
+    out = json.loads(capsys.readouterr().out)
+    assert out["key_file"] == str(tmp_path / "plugin-data" / "api_key")
+    assert out["key_source"] == f"file:{tmp_path / 'plugin-data' / 'api_key'}"
+    assert out["key_file_candidates"] == [str(tmp_path / "plugin-data" / "api_key")]
+    assert out["provider"] == "typesafe"
+
+
+def test_clear_key_removes_candidate_and_legacy(srv, monkeypatch, tmp_path):
+    monkeypatch.delenv("JEV_API_KEY_FILE", raising=False)
+    monkeypatch.setenv("PLUGIN_DATA", str(tmp_path / "plugin-data"))
+    monkeypatch.setattr(srv, "_LEGACY_KEY_FILE", str(tmp_path / "legacy" / "api_key"))
+    (tmp_path / "plugin-data").mkdir()
+    (tmp_path / "plugin-data" / "api_key").write_text("plugin-key\n")
+    (tmp_path / "legacy").mkdir()
+    (tmp_path / "legacy" / "api_key").write_text("legacy-key\n")
+    srv._cli_clear_key()
+    assert not (tmp_path / "plugin-data" / "api_key").exists()
+    assert not (tmp_path / "legacy" / "api_key").exists()
     assert srv._typesafe_key() is None
