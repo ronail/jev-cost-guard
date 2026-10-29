@@ -1,12 +1,15 @@
 {
+  "description": "Soft jev gate: judge a large tool output and add one advisory line. Never blocks the turn and never replaces the payload. Codex requires hook trust once (run /hooks).",
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "Bash|Write|Edit|MultiEdit",
+        "matcher": "Bash|exec|apply_patch|Edit|Write|MultiEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/claude-codex-jev-verdict.py\""
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}/hooks/claude-codex-jev-verdict.py\"",
+            "statusMessage": "jev: judging tool output",
+            "timeout": 30
           }
         ]
       }

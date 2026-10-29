@@ -495,6 +495,40 @@ env_vars = ["TYPESAFE_API_KEY"]
 `env_vars` is Codex's documented "allow and forward" list — verified: the value arrives in the
 spawned server's environment while unlisted variables do not.
 
+#### The PostToolUse gate: the only trigger the model cannot skip
+
+Nothing makes a model *choose* to call jev — measured: 62 sessions, zero `jev_*` calls, with the
+skills advertised and an explicit `AGENTS.md` instruction in place. A hook is different: Codex runs
+it whether or not the model wants it.
+
+`hooks/hooks.json` (shipped in the plugin) matches `Bash|exec|apply_patch|Edit|Write`, so it sees
+Codex's shell calls (`exec` maps to `Bash`) and its edits. When an output exceeds
+`JEV_VERDICT_THRESHOLD_CHARS` (4000), the hook pipes it to `server.py --verdict` and injects one
+developer line; the original output is untouched, and the hook always exits 0:
+
+```text
+[jev] Bash: 4100 chars judged, noul=0.1 -> likely-failure
+      (model=jev-1.13.0, endpoint=https://api.typesafe.ai/v1/systemone).
+      Advisory only — the tool output above is unchanged; …
+```
+
+That line arrives as `hooks.additional_context`, so it costs one jev request per large output and
+never replaces the payload.
+
+**Two things are required for it to run in Codex:**
+
+1. **Trust.** Installing or enabling a plugin does not trust its hooks — Codex records trust against
+   the hook's hash and skips it until you review it. Run `/hooks` once in the CLI and trust the
+   `jev-cost-guard` entry; any edit to `hooks.json` or the script requires re-trusting. Automation
+   that already vets its sources can pass `--dangerously-bypass-hook-trust`.
+2. **A credential the hook can see.** Hooks do not inherit the declared server's `env` block, and
+   Codex scrubs the subprocess environment, so the hook falls back to the Codex-owned file
+   `$CODEX_HOME/jev/api_key`. Keep that file, or set `TYPESAFE_API_KEY` / `JEV_API_KEY_FILE` in the
+   environment that launches Codex.
+
+A plugin-bundled `PostToolUse` **shadows** a user-level `~/.codex/hooks.json` one, so define the gate
+in exactly one place — otherwise whichever wins silently starves the other.
+
 To use the OpenCode Zen relay instead, opt out explicitly:
 
 ```sh
