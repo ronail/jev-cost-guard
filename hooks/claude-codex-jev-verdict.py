@@ -1,23 +1,32 @@
 #!/usr/bin/env python3
-"""Claude Code / Codex hook: route large tool outputs through the jev oracle.
+"""Claude Code / Codex PostToolUse hook: judge large tool outputs with jev.
 
-Soft auto-gate (NEVER blocks the harness). Reads the harness hook envelope on
-stdin, extracts the tool output, and when it exceeds JEV_VERDICT_THRESHOLD_CHARS
-(default 4000) pipes it to ../mcp/jev/server.py --verdict, which asks jev the
-`is_successful` noul question and prints a JSON verdict line. The jev call
-inherits the harness env: `TYPESAFE_API_KEY` (preferred — api.typesafe.ai,
-`jev-latest`) or `OPENCODE_ZEN_API_KEY` (zen relay, with its paid/TypeSafe
-fallbacks); the server picks the provider from whichever key is present. With no
-key at all it uses the zen `Bearer public` free tier. Prints the verdict to
-stdout (the harness surfaces it), always exits 0 so a jev slip never stalls a
-session.
+Soft gate — it never blocks the harness and never replaces the payload. When a
+tool result exceeds JEV_VERDICT_THRESHOLD_CHARS (default 4000) the hook pipes it
+to ../mcp/jev/server.py --verdict, which asks jev the `is_successful` noul
+question, and returns one advisory line as `additionalContext`. The original
+tool result still reaches the model, so nothing is lost when jev is wrong.
 
-Wiring:
-  Claude Code: ~/.claude/claude_desktop_config.json  ->  hooks.PostToolUse
-      [{"command": "python3 /repo/hooks/claude-codex-jev-verdict.py"}]
-  Codex:       ~/.codex/config.toml -> hooks (same script; envelope has tool_name + output)
+Both harness envelopes are accepted:
+
+  Claude Code   {"tool_name": "Bash", "tool_result": {"output": ...}}
+  Codex         {"tool_name": "Bash", "tool_response": {...}, "hook_event_name": ...}
+
+Codex matcher names differ (shell calls arrive as `Bash`, edits as
+`apply_patch` / `Edit` / `Write`), so hooks.json matches both vocabularies and
+this script does not care which one it was handed.
+
+Credential: inherited from the harness env (`TYPESAFE_API_KEY`, or
+`OPENCODE_ZEN_API_KEY` / `JEV_API_KEY_FILE`). Codex scrubs that environment, so
+as a last step it falls back to the Codex-owned credential file, `$CODEX_HOME/jev/api_key`
+(see README). Without any key the server uses the keyless Zen relay.
+
+Always exits 0: a jev slip must never stall a session.
 """
-import json, os, subprocess, sys
+import json
+import os
+import subprocess
+import sys
 
 # Claude Code plugin: userConfig values arrive as CLAUDE_PLUGIN_OPTION_<KEY>
 # (uppercased), not under the jev env names. Map them so the jev call can
@@ -31,63 +40,118 @@ for _opt, _env in (
 
 HERE = os.path.dirname(os.path.abspath(__file__))  # this file's dir (hooks/)
 REPO_ROOT = os.path.dirname(HERE)  # repo root (parent of hooks/)
-SERVER = os.path.join(REPO_ROOT, "mcp", "jev", "server.py")
+SERVER = os.environ.get("JEV_SERVER_PATH") or os.path.join(
+    REPO_ROOT, "mcp", "jev", "server.py"
+)
 THRESHOLD = int(os.environ.get("JEV_VERDICT_THRESHOLD_CHARS", "4000"))
+TIMEOUT = float(os.environ.get("JEV_VERDICT_TIMEOUT_S", "20"))
+
+# Never gate jev's own tools: their output is the decision the model is reading,
+# and a second jev call per result would cost more than it saves.
+_JEV_PREFIXES = ("jev_", "mcp__jev__", "mcp__plugin_jev", "codex_jev")
 
 
-def _extract_output(event):
-    """Pull the tool output text out of a Claude Code / Codex hook envelope."""
-    res = event.get("tool_result") or {}
-    out = res.get("output")
-    if out is None and isinstance(res, dict):
-        out = res.get("content")
-    if out is None:
-        out = event.get("tool_output", "")
-    if out is None:
+def _is_jev_tool(name: str) -> bool:
+    return any(name.startswith(p) for p in _JEV_PREFIXES)
+
+
+def _flatten(value) -> str:
+    """Text content of a tool response, whatever shape the harness used."""
+    if value is None:
         return ""
-    if isinstance(out, str):
-        return out
-    if isinstance(out, dict) and out.get("content"):
-        parts = out["content"]
-        if isinstance(parts, dict):
-            parts = [parts]
-        return "".join(p.get("text", "") if isinstance(p, dict) else str(p)
-                       for p in parts)
-    return str(out)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        return "".join(_flatten(v) for v in value)
+    if isinstance(value, dict):
+        parts = []
+        for key in ("output", "stdout", "stderr", "content", "text", "result",
+                    "formatted_output"):
+            if key in value:
+                text = _flatten(value.get(key))
+                if text:
+                    parts.append(text)
+        if parts:
+            return "\n".join(parts)
+        return "".join(_flatten(v) for v in value.values())
+    return str(value)
 
 
-def main():
+def _extract_output(event: dict) -> str:
+    """Pull the tool output text out of a Claude Code / Codex hook envelope."""
+    for key in ("tool_response", "tool_result", "tool_output"):
+        if key in event:
+            text = _flatten(event.get(key))
+            if text:
+                return text
+    return ""
+
+
+def _as_context(text: str) -> str:
+    """The harness-agnostic stdout shape (both hosts read additionalContext)."""
+    return json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": text,
+        }
+    })
+
+
+def _ensure_credential() -> None:
+    """Point the server at a Codex-owned key file when the env carries none."""
+    if any(os.environ.get(k) for k in ("TYPESAFE_API_KEY", "OPENCODE_ZEN_API_KEY",
+                                       "JEV_API_KEY_FILE", "JEV_PROVIDER")):
+        return
+    home = os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
+    candidate = os.path.join(home, "jev", "api_key")
+    if os.path.isfile(candidate):
+        os.environ["JEV_API_KEY_FILE"] = candidate
+
+
+def main() -> None:
     try:
         event = json.load(sys.stdin)
     except Exception:
         sys.exit(0)
-    if not isinstance(event, dict) or not event.get("tool_name"):
+    if not isinstance(event, dict):
+        sys.exit(0)
+    tool = str(event.get("tool_name") or "")
+    if not tool or _is_jev_tool(tool):
         sys.exit(0)
     output = _extract_output(event)
     n = len(output)
     if n < THRESHOLD:
-        sys.exit(0)  # below gate threshold — nothing to judge
+        sys.exit(0)  # below the gate threshold — nothing worth judging
+    _ensure_credential()
     try:
         proc = subprocess.run(
             [sys.executable, SERVER, "--verdict"],
-            input=output, capture_output=True, text=True, timeout=90,
+            input=output, capture_output=True, text=True, timeout=TIMEOUT,
         )
-        verdict = proc.stdout.strip()
-        if verdict:
-            try:
-                v = json.loads(verdict)
-                print(f"[jev-gate] {event['tool_name']}: output={n}c "
-                      f"model={v.get('model')} noul={v.get('noul')} "
-                      f"->{v.get('interpretation')} verdict={verdict}")
-            except json.JSONDecodeError:
-                print(f"[jev-gate] {event['tool_name']}: {verdict}")
-        else:
-            print(f"[jev-gate] {event['tool_name']}: output={n}c "
-                  f"jev unavailable (exit={proc.returncode}) "
-                  f"{proc.stderr.strip()[:200]}")
-    except Exception as e:
-        print(f"[jev-gate] {event['tool_name']}: error {e}")
-    sys.exit(0)  # soft gate: never block the harness
+    except Exception as e:  # timeout, missing server, unreadable exec
+        sys.stderr.write(f"[jev-gate] {tool}: skipped ({e})\n")
+        sys.exit(0)
+    raw = proc.stdout.strip()
+    if not raw:
+        sys.exit(0)
+    try:
+        v = json.loads(raw)
+    except json.JSONDecodeError:
+        sys.exit(0)
+    if not v.get("ok"):
+        sys.exit(0)
+    verdict = (f"noul={v.get('noul')} -> {v.get('interpretation')}"
+               if v.get("noul") is not None
+               else f"verdict={raw}")
+    print(_as_context(
+        f"[jev] {tool}: {n} chars judged, {verdict} "
+        f"(model={v.get('model')}, endpoint={v.get('endpoint')}). "
+        "Advisory only — the tool output above is unchanged; read it when the "
+        "verdict is not enough, and say so if you disagree."
+    ))
+    sys.exit(0)
 
 
 if __name__ == "__main__":
