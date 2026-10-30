@@ -447,7 +447,7 @@ application that created it:
 
 | Where | File |
 | --- | --- |
-| Codex | `~/.codex/plugins/data/jev-cost-guard-jev-cost-guard/api_key` |
+| Codex | `$PLUGIN_DATA/api_key` — the host picks that directory and it can change on reinstall, so let `--key-status` (or the "key required" error) print the exact path. It is currently under `~/.codex/plugins/data/agent-plugins/<hash>/api_key`, **not** `…/data/jev-cost-guard-jev-cost-guard/` |
 | a caller with no `PLUGIN_DATA` (hook, bare CLI) | name one with `--path`, or set `JEV_API_KEY_FILE` |
 
 There is no global fallback on purpose. A key at `~/.config/jev/api_key` is owned by nobody an
@@ -464,9 +464,10 @@ The installed server can do the same for you, if you'd rather not echo the key:
 ```sh
 codex mcp get jev      # prints the installed server path in its args
 
-# a host-launched run already has PLUGIN_DATA; passing it makes the CLI behave the same
-PLUGIN_DATA=~/.codex/plugins/data/jev-cost-guard-jev-cost-guard \
-  python3 ~/.codex/plugins/cache/jev-cost-guard/jev-cost-guard/<version>/mcp/jev/server.py --set-key
+# a host-launched run already has PLUGIN_DATA; passing it makes the CLI behave the same.
+# Codex masks that value in `codex mcp get jev`, so take it from --key-status or from the
+# "key required" error, which both print the exact directory:
+PLUGIN_DATA=<that directory> python3 ~/.codex/plugins/cache/jev-cost-guard/jev-cost-guard/<version>/mcp/jev/server.py --set-key
 
 # no owner directory in this process? name the file yourself, under the app that should own it
 python3 <server.py> --set-key --path ~/.codex/jev/api_key
@@ -494,6 +495,46 @@ env_vars = ["TYPESAFE_API_KEY"]
 
 `env_vars` is Codex's documented "allow and forward" list — verified: the value arrives in the
 spawned server's environment while unlisted variables do not.
+
+#### Tool calls are approval-gated, and only a config-declared server can opt out
+
+Codex refuses an MCP tool call it cannot get approval for. In `codex exec` (policy `never`) every
+call fails with:
+
+```text
+mcp: jev/jev_health (failed)
+MCP tool call requires approval, but approval policy is never
+```
+
+`default_tools_approval_mode = "approve"` (values `auto | prompt | writes | approve`) lifts that per
+server, or `[mcp_servers.jev.tools.<tool>] approval_mode = "approve"` per tool. Two things measured
+on 0.153.4:
+
+- Setting it on the **plugin-provided** table
+  (`[plugins."jev-cost-guard@jev-cost-guard".mcp_servers.jev]`) has **no effect** — the call is still
+  refused. Declare the server in `config.toml` instead.
+- A **config-declared** server does **not** receive `PLUGIN_DATA`, so it cannot find the key file
+  above. Give it the credential explicitly, or it silently falls back to the keyless Zen relay:
+
+```toml
+[plugins."jev-cost-guard@jev-cost-guard".mcp_servers.jev]
+enabled = false                       # otherwise the plugin's copy and this one both exist
+
+[mcp_servers.jev]
+command = "python3"
+args = ["<repo>/mcp/jev/server.py"]
+default_tools_approval_mode = "approve"
+
+[mcp_servers.jev.env]
+JEV_API_KEY_FILE = "<the path --key-status printed>"
+# or: TYPESAFE_API_KEY = "ts-…"
+```
+
+Verified end to end, with no approval and no bypass flag:
+
+```text
+[jev] ok: model=jev-1.13.0 endpoint=https://api.typesafe.ai/v1/systemone -> alive
+```
 
 #### The PostToolUse gate: the only trigger the model cannot skip
 
@@ -539,10 +580,11 @@ The switch is host-aware: Codex sets `PLUGIN_ROOT` and not `CLAUDE_PLUGIN_ROOT`,
 requirement turns on automatically for plugin-loaded servers. `JEV_REQUIRE_TYPESAFE=0|1`
 overrides it either way.
 
-> Plugin **skills and hooks** load in Codex (the `jev-*` skills appear in its context), but
-> `codex exec` 0.153.4 does not surface stdio MCP tools in the model's tool list — even for an
-> explicitly registered server. Register the server as above and check `codex mcp list` /
-> `codex mcp get jev`; the tools themselves are host-dependent.
+> Plugin **skills, hooks and MCP tools** all load in Codex: the `jev-*` skills appear in its
+> context, and the four tools reach the model as `mcp__jev__jev_health` / `…_jev_find` /
+> `…_jev_summarize` / `…_jev_screen` (verified on 0.153.4 by listing them out of the model's own tool
+> registry, not from `codex mcp list`). What actually keeps them unused is the approval gate above
+> plus a missing key — not availability.
 >
 > The skills themselves never shell out to `hermes`: measurement, pruning and scratch dirs
 > all have a Codex-native path (see `docs/harness-adapters.md`), so a Codex session reports an
