@@ -542,10 +542,10 @@ Nothing makes a model *choose* to call jev — measured: 62 sessions, zero `jev_
 skills advertised and an explicit `AGENTS.md` instruction in place. A hook is different: Codex runs
 it whether or not the model wants it.
 
-`hooks/hooks.json` (shipped in the plugin) matches `Bash|exec|apply_patch|Edit|Write`, so it sees
-Codex's shell calls (`exec` maps to `Bash`) and its edits. When an output exceeds
-`JEV_VERDICT_THRESHOLD_CHARS` (4000), the hook pipes it to `server.py --verdict` and injects one
-developer line; the original output is untouched, and the hook always exits 0:
+The hook script matches `Bash|exec|apply_patch|Edit|Write`, so it sees Codex's shell calls (`exec`
+maps to `Bash`) and its edits. When an output exceeds `JEV_VERDICT_THRESHOLD_CHARS` (4000), it pipes
+the text to `server.py --verdict` and injects one developer line; the original output is untouched,
+and the hook always exits 0:
 
 ```text
 [jev] Bash: 4100 chars judged, noul=0.1 -> likely-failure
@@ -556,19 +556,40 @@ developer line; the original output is untouched, and the hook always exits 0:
 That line arrives as `hooks.additional_context`, so it costs one jev request per large output and
 never replaces the payload.
 
-**Two things are required for it to run in Codex:**
+**In Codex the gate has to be declared, not bundled.** Claude Code discovers the plugin's own
+`hooks/hooks.json`; Codex 0.153.4 does **not** (measured — `/hooks` lists no `jev-cost-guard` entry,
+and nothing fires, for all three forms: the default `hooks/hooks.json`, a `hooks` entry in the root
+`plugin.json`, and one in `.claude-plugin/plugin.json`). A hook declared in a config layer *does*
+run, so install it there, pointing at the installed copy:
 
-1. **Trust.** Installing or enabling a plugin does not trust its hooks — Codex records trust against
-   the hook's hash and skips it until you review it. Run `/hooks` once in the CLI and trust the
-   `jev-cost-guard` entry; any edit to `hooks.json` or the script requires re-trusting. Automation
+```toml
+# ~/.codex/config.toml  (or ~/.codex/hooks.json with the JSON equivalent)
+[[hooks.PostToolUse]]
+matcher = "Bash|exec|apply_patch|Edit|Write"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/plugins/cache/jev-cost-guard/jev-cost-guard/<version>/hooks/claude-codex-jev-verdict.py"'
+statusMessage = "jev: judging tool output"
+timeout = 30
+```
+
+**Three things are required for it to run:**
+
+1. **Trust.** Installing or enabling a plugin does not trust its hooks, and a config-layer hook needs
+   the same review — Codex records trust against the hook's hash and skips it until you accept it.
+   Run `/hooks` once; any edit to the command, matcher, or script requires re-trusting. Automation
    that already vets its sources can pass `--dangerously-bypass-hook-trust`.
 2. **A credential the hook can see.** Hooks do not inherit the declared server's `env` block, and
    Codex scrubs the subprocess environment, so the hook falls back to the Codex-owned file
    `$CODEX_HOME/jev/api_key`. Keep that file, or set `TYPESAFE_API_KEY` / `JEV_API_KEY_FILE` in the
-   environment that launches Codex.
+   environment that launches Codex. A keyless hook still answers — on `jev-1.13-free` against
+   `opencode.ai/zen`, which is why the line prints its endpoint.
+3. **One owner.** Define the gate in exactly one config layer. Two copies both fire, and a duplicate
+   doubles the jev requests per large output.
 
-A plugin-bundled `PostToolUse` **shadows** a user-level `~/.codex/hooks.json` one, so define the gate
-in exactly one place — otherwise whichever wins silently starves the other.
+> Codex now also sets `CLAUDE_PLUGIN_ROOT` for plugin hooks, but the earlier bundled form still never
+> registered, so the config-layer route above is the supported one.
 
 To use the OpenCode Zen relay instead, opt out explicitly:
 
