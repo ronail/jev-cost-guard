@@ -51,6 +51,7 @@ is accepted.
 | `jev-delegate-guard` | pick the leanest child profile; break-even gate |
 | `jev-test-output-triage` | triaging test/log bloat |
 | `jev-source-digest` | triaging web/page bloat |
+| **`jev-analytics`** | opt-in per-turn cost report: tokens jev saved, what the verdict changed, the diff |
 | **`jev-mcp-model-server`** | usage guide: how/when to drive jev (TypeSafe or zen) via this MCP |
 
 Add the ones you want to each profile's `skills.auto_load` in `config.yaml`.
@@ -106,6 +107,8 @@ and failure modes) are documented in `mcp/jev/env.example` and the server docstr
 | `JEV_FALLBACK_TO_PAID` | `1` | `1` (default) on `jev-1.13-free` exhaustion (HTTP 429/403 with a real key) retry the paid model; `0` fails open; no-key never falls back |
 | `JEV_FALLBACK_MODEL` | `jev-1.13` | paid model retried on free exhaustion (same key/endpoint/UA; bills your opencode account) |
 | `JEV_DEBUG` | `0` | optional — `verbose` = print masked provider/key diagnostics (**not** `1`: MCP env values must be strings) |
+| `JEV_ANALYTICS_DIR` | `$PLUGIN_DATA/analytics` → `~/.local/state/jev-cost-guard` | state dir for the analytics marker + ledger; both `jev_analytics.py` and the MCP server resolve it identically |
+| `JEV_CALL_LOG` | `$JEV_ANALYTICS_DIR/calls.jsonl` | optional — where analytics rows are appended (one JSON line per jev tool call) |
 | `OPENCODE_ZEN_API_KEY` | env (Hermes: profile `.env`) | required for the real-key path |
 
 ### `jev_health` / `jev_summarize`
@@ -231,6 +234,7 @@ faster it pays off. No other model is involved.
 | `docs/harness-adapters.md` | capability → tool/command map for Hermes / Claude Code / Codex / Antigravity, plus the no-cross-harness rule |
 | `scripts/prompt_budget.py` | portable fixed-prompt / skills-index estimator (no harness CLI, no lock, no network) |
 | `scripts/check_harness_agnostic.py` | guard: no skill may present another runtime's CLI as an unscoped requirement |
+| `scripts/jev_analytics.py` | the analytics switch (`on`/`off`/`status`) + the per-turn report: official DeepSeek list prices only, `$ n/a` otherwise |
 | `mcp/jev/server.py` | the one jev implementation: MCP stdio server (dual-frame) + `--verdict` CLI; owns provider selection (TypeSafe / OpenCode Zen) and every fallback |
 | `mcp/jev/env.example` | env reference: TypeSafe + Zen auth, fallback knobs, failure modes |
 | `hooks/claude-codex-jev-verdict.py` | standalone soft-gate hook for Claude Code / Codex |

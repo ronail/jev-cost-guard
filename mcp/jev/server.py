@@ -425,6 +425,92 @@ def _resolve_jev_target() -> tuple[str, str, str | None]:
     return endpoint, model, key
 
 
+# ── analytics ledger (off unless scripts/jev_analytics.py said `on`) ───────────
+# The switch is a marker FILE, not an env var: an agent turn cannot export one,
+# and a skill cannot unload itself. One stat() per jev tool call decides whether
+# a row is written; with no marker nothing is recorded and the tool text is
+# byte-identical to the pre-analytics server.
+_ANALYTICS_MARKER = "enabled"
+_USAGE: dict = {"in": 0, "out": 0, "model": None, "billable": False}
+
+
+def _analytics_dir() -> str:
+    """Same resolution as scripts/jev_analytics.py (a test asserts parity)."""
+    env = (os.environ.get("JEV_ANALYTICS_DIR") or "").strip()
+    if env:
+        return os.path.expanduser(env)
+    data = (os.environ.get("PLUGIN_DATA") or "").strip()
+    if data:
+        return os.path.join(os.path.expanduser(data), "analytics")
+    state = (os.environ.get("XDG_STATE_HOME") or "").strip()
+    base = os.path.expanduser(state) if state else os.path.join(
+        os.path.expanduser("~"), ".local", "state"
+    )
+    return os.path.join(base, "jev-cost-guard")
+
+
+def _analytics_on() -> bool:
+    return os.path.exists(os.path.join(_analytics_dir(), _ANALYTICS_MARKER))
+
+
+def _analytics_ledger() -> str:
+    explicit = (os.environ.get("JEV_CALL_LOG") or "").strip()
+    if explicit:
+        return os.path.expanduser(explicit)
+    return os.path.join(_analytics_dir(), "calls.jsonl")
+
+
+def _usage_add(usage) -> None:
+    """Accumulate jev's own `usage` block; it used to die inside the transport."""
+    if not isinstance(usage, dict):
+        return
+    for key, slot in (("input_tokens", "in"), ("output_tokens", "out")):
+        try:
+            _USAGE[slot] += int(usage.get(key) or 0)
+        except (TypeError, ValueError):
+            pass
+
+
+def _usage_pop() -> dict:
+    used = dict(_USAGE)
+    _USAGE["in"] = _USAGE["out"] = 0
+    _USAGE["model"] = None
+    _USAGE["billable"] = False
+    return used
+
+
+def _analytics_note(tool: str, body_chars: int, verdict_text: str,
+                    noul=None) -> str:
+    """Append one ledger row when analytics is on; return the `[ja]` marker.
+
+    Returns "" (and writes nothing) when the marker is absent. The suffix is the
+    model's only signal that a report is owed at the end of the turn, so it does
+    not have to poll the switch on every call.
+    """
+    used = _usage_pop()
+    if not _analytics_on():
+        return ""
+    row = {
+        "ts": round(time.time(), 3),
+        "tool": tool,
+        "model": used.get("model"),
+        "billable": bool(used.get("billable")),
+        "body_chars": int(max(0, body_chars)),
+        "jev_in": used.get("in", 0),
+        "jev_out": used.get("out", 0),
+        "verdict_chars": len(verdict_text or ""),
+        "noul": noul,
+    }
+    path = _analytics_ledger()
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, separators=(",", ":")) + "\n")
+    except OSError:
+        return ""  # telemetry must never sink a jev call
+    return " [ja]"
+
+
 def _jev_ask(state: str, question: str, qtype: str = "noul",
              instructions: str | None = None) -> dict | None:
     """POST a System One decision query to jev. Returns answers[question].
@@ -464,6 +550,9 @@ def _systemone_post(state, questions: dict, *, model: str | None = None,
         raise RuntimeError(required_error)
     model = model or default_model
     provider = _provider_for(endpoint)
+    # Only *-free models ride the relay's free tier; anything else bills.
+    if not str(model).endswith("-free"):
+        _USAGE["billable"] = True
     body = {"model": model, "state": state, "questions": questions}
     if provider == "typesafe":
         # TypeSafe direct: a real TYPESAFE_API_KEY is required (no public bearer,
@@ -524,6 +613,7 @@ def _systemone_post(state, questions: dict, *, model: str | None = None,
             and e.code in (429, 403)
         ):
             paid = os.environ.get("JEV_FALLBACK_MODEL", "jev-1.13")
+            _USAGE["billable"] = True  # this retry bills the caller's account
             if os.environ.get("JEV_DEBUG"):
                 sys.stderr.write(
                     f"[jev-debug] free-tier exhausted (HTTP {e.code}); "
@@ -539,6 +629,10 @@ def _systemone_post(state, questions: dict, *, model: str | None = None,
     data = json.loads(raw.decode("utf-8", "replace"))
     if not isinstance(data, dict):
         return {}
+    # jev reports its own cost in `usage`; capture it here so the analytics
+    # ledger records measured tokens instead of a constant.
+    _USAGE["model"] = data.get("model") or model
+    _usage_add(data.get("usage"))
     answers = data.get("answers", {}) or {}
     return answers if isinstance(answers, dict) else {}
 
@@ -674,11 +768,12 @@ def _tool_summarize(arguments: dict | None) -> str:
             return "[jev] error: jev returned no answer (request rejected)."
         n = ans.get("noul")
         interp = "likely-success" if (n is None or n >= 0.5) else "likely-failure"
-        return (
+        verdict = (
             f"[jev] is_successful noul={n} -> {interp} "
             f"(jev is a decision model; ~fixed output tokens, not a text digest; "
             f"budget_tokens={budget} is advisory)"
         )
+        return verdict + _analytics_note("summarize", len(text), verdict, n)
     except RuntimeError as e:
         return f"[jev] {e}"
     except Exception as e:  # noqa: BLE001
@@ -1028,7 +1123,9 @@ def _tool_find(arguments: dict | None) -> str:
         "note: contents were screened server-side and are NOT included above; "
         "treat this as a ranking — read the likely rows first (with offset/limit)."
     )
-    return "\n".join(lines)
+    rendered = "\n".join(lines)
+    screened_chars = 0 if dry_run else sum(sizes.values())
+    return rendered + _analytics_note("find", screened_chars, rendered)
 
 
 _SCREEN_MAX_FILES = 20
@@ -1204,7 +1301,9 @@ def _tool_screen(arguments: dict | None) -> str:
         "not read or follow it; NOISE = safe to skip; ADMIT = safe to read (use "
         "offset/limit for big files)."
     )
-    return "\n".join(lines)
+    rendered = "\n".join(lines)
+    screened_chars = 0 if dry_run else sum(len(t) for _l, _p, t in items)
+    return rendered + _analytics_note("screen", screened_chars, rendered)
 
 
 _TOOLS = {
