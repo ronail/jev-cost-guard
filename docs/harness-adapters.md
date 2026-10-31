@@ -34,6 +34,7 @@ prerequisite: if your harness is not listed, use its nearest equivalent.
 | prune the skills index | `skills.auto_load` / `skills.disabled` in the profile `config.yaml` | remove/disable the skill dir or its plugin | move the skill dir out of the skills root; disable the plugin | move the skill dir out of `.agents/skills`; or `agy plugin disable <name>` |
 | start a scoped session with fewer skills | `hermes -p <p> chat -s A -s B` | point the skill dir at a scoped set | fresh `codex exec` after pruning | point `.agents/skills` at a scoped set |
 | drop/compact the transcript | `/compress`, `/new` | `/compact` | `/new` | start a new conversation (no documented compact command) |
+| auto-gate a large tool result | native companion hook (`native/skill-router`, optional) | `PostToolUse` hook | `PostToolUse` hook, declared in `config.toml` | `PreInvocation` hook + transcript read (its `PostToolUse` has no output) |
 
 `hermes prompt-size --json` is authoritative **only when you are Hermes**. Every
 other harness has no native prompt-size command, so the portable estimator is the
@@ -55,6 +56,14 @@ number you quote — labelled as an estimate.
   directory without editing `SKILL.md` silently drops the skill.
 - Skills double as slash commands (`/jev-skill-gate`), which is how you invoke one
   explicitly instead of hoping the model picks it.
+- **Hooks live in `hooks.json` at the plugin root** (workspace: `.agents/hooks.json`),
+  as named groups; a plugin's file is trusted as soon as it is installed — unlike Codex,
+  which needs the hook declared in a config layer and trusted by hash. `PreToolUse` and
+  `PostToolUse` wrap handlers in `{matcher, hooks:[…]}`; the other four events are flat
+  arrays.
+- **Two hook gotchas:** `PreToolUse` must answer `{"decision": …}` (`{}` is a deny), and
+  `PostToolUse` carries **no tool output** — the result is only in the transcript, which is
+  why the verdict gate runs on `PreInvocation` instead.
 
 ## Skills index: why pruning is never mid-session
 
