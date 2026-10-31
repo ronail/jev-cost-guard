@@ -1,6 +1,6 @@
 ---
 name: jev-analytics
-description: "Use when analytics output is on: report jev's per-turn token savings, what the verdict changed, and the final token diff."
+description: "Use when the user says 'jev analytics' or analytics output is on: report jev's per-turn token savings, what the verdict changed, and the token diff."
 version: 1.0.0
 author: ronail/jev-cost-guard
 license: MIT
@@ -14,6 +14,21 @@ A reporting overlay on top of the jev MCP, not a policy. When the switch is
 **on**, jev's cost and the tokens it avoided become visible; when it is **off**,
 this skill must produce zero output and zero extra calls. Concrete tool names per
 harness are in [docs/harness-adapters.md](https://github.com/ronail/jev-cost-guard/blob/main/docs/harness-adapters.md).
+
+## 0. Switching it on and off
+
+The user never runs a script and never edits config. When they say any of
+*"jev analytics on"*, *"turn on analytics"*, *"show jev cost"* — or the opposite
+— you run it for them:
+
+```sh
+python3 "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-.}}/scripts/jev_analytics.py" on
+python3 "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-.}}/scripts/jev_analytics.py" off
+```
+
+Say one line back (`jev analytics: on`) and continue with the task. If the
+script is missing, say so once and carry on — never fall back to estimating the
+numbers yourself.
 
 ## 1. Is it on? Ask the last jev response, don't poll
 
