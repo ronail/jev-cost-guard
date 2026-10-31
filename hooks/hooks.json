@@ -1,5 +1,5 @@
 {
-  "description": "jev gates: PostToolUse judges a large tool output and adds one advisory line (never replaces the payload); PreToolUse asks jev whether a shell command is routine, worth a human glance, or should be refused \u2014 audit mode by default, so it logs and never blocks until hooks/gate-policy.json says mode=enforce.",
+  "description": "jev gates: PostToolUse judges a large tool output and adds one advisory line (never replaces the payload); PreToolUse asks jev whether a shell command is routine or worth a human glance; Stop asks whether a closing message claims work the turn did not do. Both new gates are audit-only until hooks/gate-policy.json sets mode=enforce.",
   "hooks": {
     "PostToolUse": [
       {
@@ -22,6 +22,17 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}/hooks/pretool-gate.py\"",
             "statusMessage": "jev: judging command risk",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}/hooks/stop-gate.py\"",
             "timeout": 30
           }
         ]
