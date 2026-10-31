@@ -1,6 +1,6 @@
 {
   "name": "jev-cost-guard",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Token-economy guard: jev decision-model MCP tools (jev_health, jev_summarize, jev_find, jev_screen), the jev-* skills, and a PostToolUse soft gate.",
   "author": {
     "name": "ronail"
