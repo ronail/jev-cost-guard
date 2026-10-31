@@ -45,5 +45,14 @@
         ]
       }
     ]
+  },
+  "jev-stop-gate": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "python3 \"./hooks/stop-gate.py\"",
+        "timeout": 30
+      }
+    ]
   }
 }
