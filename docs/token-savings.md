@@ -75,6 +75,27 @@ sessions make more calls).
   inject profile secrets into MCP subprocesses — see
   [`mcp/jev/env.example`](https://github.com/ronail/jev-cost-guard/blob/main/mcp/jev/env.example)); nothing is committed.
 
+## Per-turn analytics (opt-in, `jev-analytics`)
+
+`scripts/jev_analytics.py on` flips a marker file; from then on every jev tool
+call appends one measured row (`body_chars`, jev's own `usage`, the verdict
+size) and the turn ends with a ~45-token report:
+
+```
+jev analytics · 1 call (est.)
+  screened  7,120 chars ≈ 1,780 tok → main model read 0
+  jev       in 2,038 / out 24 tok (jev cost unpriced)
+  saved     1,743 tok ≈ $0.00026 @ official DeepSeek deepseek-flash $0.15/$0.6 per M
+  assumption: those bodies would otherwise have been read by the main model
+```
+
+Three limits are deliberate, because a cost report that flatters itself is worse
+than none: `saved` is `body_tokens − kept_tokens` and the counterfactual is
+stated as an assumption; bodies under ~1.5k tokens are a net loss and are printed
+as one; and `$` uses **official DeepSeek list prices only** — the same model id
+ranges from `$0.02` to `$0.67` per 1M across resellers, so anything else prints
+`$ n/a` instead of a guess.
+
 ## When this differs
 - **Anthropic (cached) profiles** (`default`): prompt caching makes the stable
   prefix ~0.1× on repeated calls, so relative saving is smaller; the fixed-prompt
