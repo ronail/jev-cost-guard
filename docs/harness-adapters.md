@@ -20,24 +20,41 @@ prerequisite: if your harness is not listed, use its nearest equivalent.
 
 ## Capability map
 
-| capability | Hermes | Claude Code | Codex |
-|---|---|---|---|
-| run a shell command | `terminal` | Bash | shell tool |
-| read a file / a range | `read_file(offset, limit)` | Read | read tool (or `sed -n '10,40p' f`) |
-| find text in files | `search_files` | Grep | `rg` / `grep` via shell |
-| run code, print only the aggregate | `execute_code` | Bash (`python3 - <<'PY'`) | shell (`python3 - <<'PY'`) |
-| isolated child context | `delegate_task` | Task / subagent | separate `codex exec` run (no in-session subagent) |
-| scratch dir for spilled bodies | `$BH_AGENT_WORKSPACE/cache/` | `/tmp` or `./.cache/` | `/tmp` or `./.cache/` |
-| fetch a URL with a byte bound | `web_extract(char_limit=…)` | WebFetch | fetch tool (else `curl -r 0-N`) |
-| **native fixed-prompt measurement** | `hermes prompt-size --json` | *none* | *none* |
-| fallback measurement (works everywhere) | `python3 scripts/prompt_budget.py` | same | same |
-| prune the skills index | `skills.auto_load` / `skills.disabled` in the profile `config.yaml` | remove/disable the skill dir or its plugin | move the skill dir out of the skills root; disable the plugin |
-| start a scoped session with fewer skills | `hermes -p <p> chat -s A -s B` | point the skill dir at a scoped set | fresh `codex exec` after pruning |
-| drop/compact the transcript | `/compress`, `/new` | `/compact` | `/new` |
+| capability | Hermes | Claude Code | Codex | Antigravity |
+|---|---|---|---|---|
+| run a shell command | `terminal` | Bash | shell tool | `run_command` |
+| read a file / a range | `read_file(offset, limit)` | Read | read tool (or `sed -n '10,40p' f`) | `view_file` (`StartLine`/`EndLine`) |
+| find text in files | `search_files` | Grep | `rg` / `grep` via shell | `grep_search` |
+| run code, print only the aggregate | `execute_code` | Bash (`python3 - <<'PY'`) | shell (`python3 - <<'PY'`) | `run_command` |
+| isolated child context | `delegate_task` | Task / subagent | separate `codex exec` run (no in-session subagent) | `invoke_subagent` (`TypeName: self` for full capability, `research` for read-only) |
+| scratch dir for spilled bodies | `$BH_AGENT_WORKSPACE/cache/` | `/tmp` or `./.cache/` | `/tmp` or `./.cache/` | `/tmp` or `./.cache/` |
+| fetch a URL with a byte bound | `web_extract(char_limit=…)` | WebFetch | fetch tool (else `curl -r 0-N`) | `read_url_content` / `search_web`, else `curl -r 0-N` |
+| **native fixed-prompt measurement** | `hermes prompt-size --json` | *none* | *none* | *none* |
+| fallback measurement (works everywhere) | `python3 scripts/prompt_budget.py` | same | same | same (`--harness antigravity` knows its roots) |
+| prune the skills index | `skills.auto_load` / `skills.disabled` in the profile `config.yaml` | remove/disable the skill dir or its plugin | move the skill dir out of the skills root; disable the plugin | move the skill dir out of `.agents/skills`; or `agy plugin disable <name>` |
+| start a scoped session with fewer skills | `hermes -p <p> chat -s A -s B` | point the skill dir at a scoped set | fresh `codex exec` after pruning | point `.agents/skills` at a scoped set |
+| drop/compact the transcript | `/compress`, `/new` | `/compact` | `/new` | start a new conversation (no documented compact command) |
 
 `hermes prompt-size --json` is authoritative **only when you are Hermes**. Every
 other harness has no native prompt-size command, so the portable estimator is the
 number you quote — labelled as an estimate.
+
+### Antigravity specifics
+
+- **No todo tool.** `manage_task` manages *background processes*
+  (`list`/`kill`/`status`/`send_input`) — it is not a checklist. Track a
+  multi-step task in a **task artifact**: `write_to_file` with `IsArtifact: true`
+  and `ArtifactMetadata.ArtifactType: "task"`, then edit it with
+  `replace_file_content` / `multi_replace_file_content` as steps complete.
+- **Two skill scopes are live at once**: workspace `.agents/skills/<name>/SKILL.md`
+  (`.agent/` is still read for back-compat) and the global roots
+  `~/.gemini/config/skills` plus `~/.gemini/antigravity/skills` (IDE) and
+  `~/.gemini/antigravity-cli/skills` (CLI). Plugin skills load from
+  `~/.gemini/config/plugins/<plugin>/skills`.
+- **A skill's folder name must equal its frontmatter `name:`**, so renaming a
+  directory without editing `SKILL.md` silently drops the skill.
+- Skills double as slash commands (`/jev-skill-gate`), which is how you invoke one
+  explicitly instead of hoping the model picks it.
 
 ## Skills index: why pruning is never mid-session
 
@@ -54,6 +71,7 @@ one of two moves:
 ```sh
 python3 scripts/prompt_budget.py --harness auto        # this session's harness
 python3 scripts/prompt_budget.py --root ~/.codex/skills --budget 2500
+python3 scripts/prompt_budget.py --harness antigravity # ~/.gemini roots + plugin skills
 python3 scripts/prompt_budget.py --json                # machine-readable
 ```
 
@@ -67,6 +85,8 @@ Two filters keep the number honest:
 
 - a plugin cache usually holds plugins the harness does **not** load (disabled, or
   superseded versions), so Codex roots are filtered against `[plugins.*] enabled`
-  in `~/.codex/config.toml` (`--all-plugins` counts them anyway); roots left out
-  are reported as `excluded_roots`;
+  in `~/.codex/config.toml` (`--all-plugins` counts them anyway) and Antigravity
+  roots against `~/.gemini/config/config.json` plus the `plugin.json.disabled`
+  marker `agy plugin disable` leaves behind; roots left out are reported as
+  `excluded_roots`;
 - duplicate skill names collapse to one entry, because one name renders once.

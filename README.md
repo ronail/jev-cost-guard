@@ -225,8 +225,10 @@ faster it pays off. No other model is involved.
 |---|---|
 | `plugin.json` | portable plugin manifest (Agent Plugins 1.0.0) |
 | `mcp.json` | portable MCP declaration — `${PLUGIN_ROOT}/mcp/jev/server.py`, `JEV_MCP=1` |
+| `mcp_config.json` | Antigravity plugin MCP declaration — same `jev` server, the filename `agy` reads |
+| `.antigravity-plugin/plugin.json` | Antigravity marketplace metadata (`displayName`, `logo`, `suggestedPrompts`) |
 | `skills/` | the `jev-*` skills (auto-discovered, one SKILL.md per dir), harness-neutral |
-| `docs/harness-adapters.md` | capability → tool/command map for Hermes / Claude Code / Codex, plus the no-cross-harness rule |
+| `docs/harness-adapters.md` | capability → tool/command map for Hermes / Claude Code / Codex / Antigravity, plus the no-cross-harness rule |
 | `scripts/prompt_budget.py` | portable fixed-prompt / skills-index estimator (no harness CLI, no lock, no network) |
 | `scripts/check_harness_agnostic.py` | guard: no skill may present another runtime's CLI as an unscoped requirement |
 | `mcp/jev/server.py` | the one jev implementation: MCP stdio server (dual-frame) + `--verdict` CLI; owns provider selection (TypeSafe / OpenCode Zen) and every fallback |
@@ -256,7 +258,7 @@ Python plugin.
 
 ---
 
-## Using jev in Claude Code / Codex (portable MCP)
+## Using jev in Claude Code / Codex / Antigravity (portable MCP)
 
 The `mcp/jev/server.py` stdio server is **dual-frame**: it answers `Content-Length`
 requests (Claude Code, Codex — strict MCP clients) and newline-delimited JSON
@@ -621,6 +623,61 @@ Codex surfaces jev tools natively. For the **auto-gate**, the plugin already wir
 `hooks/hooks.json`; a manual install can point a tool-result hook at
 `hooks/claude-codex-jev-verdict.py` with the same env. Same soft-gate semantics: verdict
 logged, exits 0.
+
+### Antigravity
+
+The Antigravity App, the IDE, and the CLI load this repo as a single plugin:
+`plugin.json` + `mcp_config.json` + `skills/`. Antigravity is also the one host that
+ships a plugin validator, so a checkout can be checked before installing:
+
+```sh
+agy plugin validate .        # ✔ skills: 8 processed, ✔ mcpServers: 1 processed
+agy plugin install .         # or: agy plugin install <path>@<marketplace>
+agy plugin list --json       # components + install path under ~/.gemini/config/plugins/
+```
+
+Two measured details drive the file layout, both verified on `agy` 1.2.12:
+
+- **the plugin MCP file is `mcp_config.json`, not `mcp.json`.** A checkout carrying
+  only the portable `mcp.json` validates as `mcpServers: skipped (not found)`;
+  renaming it makes the same server load (`✔ mcpServers: 1 processed`). Both files
+  ship here and declare the same `jev` server — `mcp.json` for the portable
+  (Hermes) path, `mcp_config.json` for Antigravity.
+- **the root `plugin.json` is the manifest that CLI reads.** A manifest placed at
+  `.antigravity-plugin/plugin.json` was ignored (an intentionally invalid `name`
+  there produced no error), so the root manifest keeps the shared fields and
+  `.antigravity-plugin/plugin.json` carries the App/IDE Marketplace metadata
+  (`displayName`, `logo`, `suggestedPrompts`).
+
+MCP tool names are namespaced by plugin, so the model sees
+`jev-cost-guard_jev_jev_find` / `…_jev_summarize` / `…_jev_screen` / `…_jev_health`.
+Skills appear as slash commands (`/jev-skill-gate`).
+
+**The key.** Antigravity exports `PLUGIN_ROOT` and `PLUGIN_DATA` to every plugin MCP
+server, so the credential file the server already supports is enough — no placeholder
+expansion needed:
+
+```sh
+PLUGIN_DATA=<the plugin data directory> python3 <plugin-root>/mcp/jev/server.py --set-key
+```
+
+With no key at all the server stays on the keyless OpenCode Zen relay (`Bearer
+public`, `jev-1.13-free`), so the tools answer before any key is configured.
+
+**No PostToolUse gate here — by evidence, not by omission.** Antigravity's
+`PostToolUse` payload is `toolCall{name,args}` + `stepIdx` + `error` + `transcriptPath`;
+it does **not** carry the tool output. Judging that output would mean either scraping
+the internal `transcript.jsonl` or returning `{"overwriteResult": …}` — and the second
+is the payload replacement this plugin refuses. So on Antigravity jev is called on
+demand (by the model, or by a skill), and the soft gate stays a Claude Code / Codex
+feature.
+
+**Measure the roster** with the portable estimator, which knows Antigravity's roots
+and skips plugins `agy plugin disable` took out — local files only, no `agy` call:
+
+```sh
+python3 scripts/prompt_budget.py --harness antigravity
+```
 
 ### Hook verification
 
