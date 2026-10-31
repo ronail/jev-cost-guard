@@ -1,0 +1,11 @@
+{
+  "jev-verdict": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python3 \"./hooks/antigravity-jev-verdict.py\"",
+        "timeout": 30
+      }
+    ]
+  }
+}
