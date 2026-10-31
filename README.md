@@ -225,13 +225,19 @@ faster it pays off. No other model is involved.
 |---|---|
 | `plugin.json` | portable plugin manifest (Agent Plugins 1.0.0) |
 | `mcp.json` | portable MCP declaration — `${PLUGIN_ROOT}/mcp/jev/server.py`, `JEV_MCP=1` |
+| `mcp_config.json` | Antigravity plugin MCP declaration — same `jev` server, the filename `agy` reads |
+| `.antigravity-plugin/plugin.json` | Antigravity marketplace metadata (`displayName`, `logo`, `suggestedPrompts`) |
 | `skills/` | the `jev-*` skills (auto-discovered, one SKILL.md per dir), harness-neutral |
-| `docs/harness-adapters.md` | capability → tool/command map for Hermes / Claude Code / Codex, plus the no-cross-harness rule |
+| `docs/harness-adapters.md` | capability → tool/command map for Hermes / Claude Code / Codex / Antigravity, plus the no-cross-harness rule |
 | `scripts/prompt_budget.py` | portable fixed-prompt / skills-index estimator (no harness CLI, no lock, no network) |
 | `scripts/check_harness_agnostic.py` | guard: no skill may present another runtime's CLI as an unscoped requirement |
 | `mcp/jev/server.py` | the one jev implementation: MCP stdio server (dual-frame) + `--verdict` CLI; owns provider selection (TypeSafe / OpenCode Zen) and every fallback |
 | `mcp/jev/env.example` | env reference: TypeSafe + Zen auth, fallback knobs, failure modes |
 | `hooks/claude-codex-jev-verdict.py` | standalone soft-gate hook for Claude Code / Codex |
+| `hooks/antigravity-jev-verdict.py` | Antigravity gate: reads the transcript on `PreInvocation`, injects one verdict line |
+| `hooks/antigravity-jev-route.py` | Antigravity skill hint (opt-in, `"enabled": false`): one roster line per session |
+| `hooks.json` | Antigravity plugin wiring for that gate (root — Antigravity reads no other path) |
+| `scripts/install-antigravity.py` | no-plugin workspace install: `.agents/mcp_config.json` + `.agents/hooks.json`, merged |
 | `hooks/hooks.json` | Claude Code plugin wiring for that gate (PostToolUse) |
 | `.claude-plugin/marketplace.json` | Claude Code marketplace catalog (this repo lists itself) |
 | `.claude-plugin/plugin.json` | Claude Code plugin manifest (skills + MCP + hook + `userConfig` keys) |
@@ -256,7 +262,7 @@ Python plugin.
 
 ---
 
-## Using jev in Claude Code / Codex (portable MCP)
+## Using jev in Claude Code / Codex / Antigravity (portable MCP)
 
 The `mcp/jev/server.py` stdio server is **dual-frame**: it answers `Content-Length`
 requests (Claude Code, Codex — strict MCP clients) and newline-delimited JSON
@@ -621,6 +627,178 @@ Codex surfaces jev tools natively. For the **auto-gate**, the plugin already wir
 `hooks/hooks.json`; a manual install can point a tool-result hook at
 `hooks/claude-codex-jev-verdict.py` with the same env. Same soft-gate semantics: verdict
 logged, exits 0.
+
+### Antigravity
+
+The Antigravity App, the IDE, and the CLI load this repo as a single plugin:
+`plugin.json` + `mcp_config.json` + `skills/`. Antigravity is also the one host that
+ships a plugin validator, so a checkout can be checked before installing:
+
+```sh
+agy plugin validate .        # ✔ skills: 8 processed, ✔ mcpServers: 1 processed
+agy plugin install .         # or: agy plugin install <path>@<marketplace>
+agy plugin list --json       # components + install path under ~/.gemini/config/plugins/
+```
+
+Two measured details drive the file layout, both verified on `agy` 1.2.12:
+
+- **the plugin MCP file is `mcp_config.json`, not `mcp.json`.** A checkout carrying
+  only the portable `mcp.json` validates as `mcpServers: skipped (not found)`;
+  renaming it makes the same server load (`✔ mcpServers: 1 processed`). Both files
+  ship here and declare the same `jev` server — `mcp.json` for the portable
+  (Hermes) path, `mcp_config.json` for Antigravity.
+- **the root `plugin.json` is the manifest that CLI reads.** A manifest placed at
+  `.antigravity-plugin/plugin.json` was ignored (an intentionally invalid `name`
+  there produced no error), so the root manifest keeps the shared fields and
+  `.antigravity-plugin/plugin.json` carries the App/IDE Marketplace metadata
+  (`displayName`, `logo`, `suggestedPrompts`).
+
+MCP tool names are namespaced by plugin, so the model sees
+`jev-cost-guard_jev_jev_find` / `…_jev_summarize` / `…_jev_screen` / `…_jev_health`.
+Skills appear as slash commands (`/jev-skill-gate`).
+
+**The key.** Antigravity exports `PLUGIN_ROOT` and `PLUGIN_DATA` to every plugin MCP
+server, so the credential file the server already supports is enough — no placeholder
+expansion needed:
+
+```sh
+PLUGIN_DATA=<the plugin data directory> python3 <plugin-root>/mcp/jev/server.py --set-key
+```
+
+With no key at all the server stays on the keyless OpenCode Zen relay (`Bearer
+public`, `jev-1.13-free`), so the tools answer before any key is configured.
+
+Verified live in a `agy -p` session, not inferred from the install: the model reached
+for the plugin's server as `call_mcp_tool` with `ServerName: "jev-cost-guard_jev"` and
+`ToolName: "jev_health"`, and the tool answered
+
+```text
+[jev] ok: model=jev-1.13.0 endpoint=https://api.typesafe.ai/v1/systemone -> alive
+```
+
+#### Hooks run — a bundled `hooks.json` is enough
+
+Measured with a probe plugin that logged every payload (`agy` 1.2.12, `agy -p`): all six
+events fire, `SessionStart` → `PreInvocation` → `PreToolUse` → `PostToolUse` →
+`PostInvocation` → `Stop`, from a plugin's own `hooks.json` — no trust step, no
+config-layer declaration, no `/hooks` review. That is the opposite of Codex, where a
+plugin-bundled hook never registers.
+
+What each payload carries (real keys, nothing omitted):
+
+| event | keys |
+|---|---|
+| `SessionStart` | `conversationId`, `workspacePaths`, `transcriptPath`, `artifactDirectoryPath`, `modelName` |
+| `PreToolUse` | `toolCall{name,args}`, `stepIdx`, + common |
+| `PostToolUse` | `toolCall{name,args}`, `stepIdx`, `error`, `lastUserInput`, + common |
+| `PreInvocation`/`PostInvocation` | `invocationNum`, `initialNumSteps`, + common |
+| `Stop` | `executionNum`, `terminationReason`, `fullyIdle`, `error`, + common |
+
+Two traps found the hard way:
+
+- **`PreToolUse` must answer `{"decision": …}`.** Returning `{}` is treated as a **deny**
+  — the run failed with `tool call denied by pre-tool hook` and the model reported the
+  blocked command instead.
+- **Tool names are not the documented ones.** The CLI sent `name: "read_file"` with
+  `args.Path` (the App/IDE vocabulary in the docs is `view_file` with `args.AbsolutePath`)
+  and MCP through `name: "call_mcp_tool"` with `args.ServerName` + `args.ToolName`. A
+  matcher written from the docs alone therefore misses calls; use `.*` or cover both.
+
+#### The verdict gate — it ships, on `PreInvocation`
+
+`PostToolUse` fires after the tool and carries **no output** (only `toolCall{name,args}`,
+`error`, `lastUserInput`), so the Claude/Codex gate cannot be ported verbatim. The tool
+result does exist in the transcript the event points at, so the gate runs one step
+earlier and stays additive:
+
+```text
+hooks.json  jev-verdict → PreInvocation → python3 ./hooks/antigravity-jev-verdict.py
+```
+
+1. read `transcriptPath`, collect `GENERIC` tool-result rows newer than the last judged
+   step (a `GENERIC` row counts only when the model turn before it carried `tool_calls`,
+   so model prose is never judged),
+2. pick the **single largest** one above `JEV_VERDICT_THRESHOLD_CHARS` (4000),
+3. ask jev via the one-shot `mcp/jev/server.py --verdict` CLI,
+4. inject one line as `injectSteps[].ephemeralMessage` — the tool output is already in
+   the transcript and is never replaced, rewritten, or blocked.
+
+One jev call per model invocation at most; the judged step is remembered per
+conversation (under `$TMPDIR/jev-agy-verdict`, or `JEV_AGY_STATE_DIR`), so a turn with
+several results does not re-bill. jev's own MCP results (`call_mcp_tool` on a
+`jev…` server) are never judged. Every failure path — no transcript, unreadable row,
+server error, timeout — prints nothing and exits 0.
+
+Measured in a live `agy -p` session (`seq 1 3000` as the tool output) — the model quoted
+the injected line back verbatim, proving it reached context:
+
+```text
+[jev] run_command: 10316 chars judged, noul=0.68 -> likely-success
+      (model=jev-1.13.0, endpoint=https://api.typesafe.ai/v1/systemone). Advisory only — …
+```
+
+The transcript is an internal Antigravity format (it already renamed once, from
+`transcript.jsonl` to `transcript_full.jsonl`), so treat this gate as best-effort: if a
+release changes the row shape, the hook silently stops judging and nothing else breaks.
+The `PreToolUse`/`Stop` gates (permission, completion) remain unbuilt — they see enough
+to decide and are the next natural step if you want a *hard* gate.
+
+#### Optional: one skill hint per session (opt-in)
+
+`hooks/antigravity-jev-route.py` is the Antigravity form of the Hermes
+`pre_llm_call` router: on `PreInvocation` #0 it reads the last `USER_INPUT` from the
+transcript, ranks the live roster (reusing `prompt_budget.py`'s scanner, so there is one
+roster implementation), and injects one line naming the best fit. Deterministic, no jev
+call, one hint per conversation.
+
+It ships **disabled**, because a per-session advisory line was measured to have ~0
+effect on whether the model actually calls a tool — it must not spend anything by
+default. Turn it on in `hooks.json`:
+
+```json
+"jev-skill-hint": { "enabled": true, "PreInvocation": [ … ] }
+```
+
+Verified with the flag on: a real session whose request was *"my test output is enormous
+and I cannot find the failures"* got ``[jev] Skill hint: `jev-test-output-triage` matches
+this request on 7 term(s)`` and quoted it back.
+
+#### Install without the plugin (one workspace)
+
+Antigravity also reads workspace-scoped `.agents/` files, which needs no plugin at all.
+The installer merges into whatever is already there (other servers and hook groups are
+kept):
+
+```sh
+python3 scripts/install-antigravity.py                    # cwd as the workspace
+python3 scripts/install-antigravity.py --workspace ~/app --no-hook
+```
+
+It writes `.agents/mcp_config.json` (the `jev` server, absolute path — `${PLUGIN_ROOT}`
+only resolves inside an installed plugin) and `.agents/hooks.json` (the gate). Verified
+with the plugin disabled: the workspace server answered `jev_health` and the workspace
+gate injected its line.
+
+#### What `agy plugin validate` warns about here, and why
+
+```text
+⚠ .mcp.json: never loaded: this is Claude Code's file name
+⚠ hooks/hooks.json: never loaded: plugin hooks are read only from hooks.json at the plugin root
+⚠ mcp.json: never loaded: mcp.json is read only for Agent Plugins plugins
+⚠ plugin.json: ignored: .antigravity-plugin/plugin.json takes precedence
+```
+
+All four are expected: this repo serves four hosts from one tree. `.mcp.json` and
+`hooks/hooks.json` are Claude Code's, `mcp.json` is Hermes/portable, and the Antigravity
+reads are `mcp_config.json`, root `hooks.json`, and `.antigravity-plugin/plugin.json`.
+Validation still passes, with `skills 8 · hooks 1 · mcpServers 1`.
+
+**Measure the roster** with the portable estimator, which knows Antigravity's roots
+and skips plugins `agy plugin disable` took out — local files only, no `agy` call:
+
+```sh
+python3 scripts/prompt_budget.py --harness antigravity
+```
 
 ### Hook verification
 

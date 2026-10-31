@@ -76,6 +76,7 @@ always `python3 <repo>/mcp/jev/server.py`; only the registry differs:
 | Hermes | `hermes -p <profile> mcp add jev --command python3 --args <repo>/mcp/jev/server.py`, or `mcp_servers` in the profile `config.yaml` | profile `.env`, or `--env JEV_MODEL=…` |
 | Claude Code | `mcpServers.jev` in the Claude Code config (plus `hooks.PostToolUse` for the gate) | that config's `env`, or the OS env |
 | Codex | `codex mcp add jev -- python3 <repo>/mcp/jev/server.py`, or `[mcp_servers.jev]` in `config.toml` | `env_vars` / `[mcp_servers.jev.env]` |
+| Antigravity | `agy plugin install .` (bundles `mcp_config.json`), or `.agents/mcp_config.json` for one workspace | that file's `env`, `$PLUGIN_DATA/api_key`, or the OS env |
 | anything else | its MCP registry / config file | its own env |
 
 Rules that keep this portable: register in **your** harness only; never run another
@@ -99,6 +100,13 @@ transcript. The verdict reuses `_jev_ask`, so the same auth + paid-jev fallback
 own harness's hook registry (Claude Code: `hooks.PostToolUse` in its config; Codex: a
 tool-result hook in its `config.toml`; anything else: its hook mechanism). The
 script's contract is just stdin envelope → JSON verdict line on stdout, exit 0.
+
+Antigravity is the exception that needs a second script: its `PostToolUse` payload has
+no tool output (measured — only `toolCall{name,args}`, `stepIdx`, `error`,
+`lastUserInput`), so `hooks/antigravity-jev-verdict.py` runs on **`PreInvocation`**,
+reads the tool result out of the transcript the event points at, judges the largest
+new one, and injects a single advisory `ephemeralMessage`. Same threshold, same
+one-shot `--verdict` CLI, same fail-open, one jev call per model invocation.
 
 ## Pitfalls
 - The key comes from the harness you are running in (Hermes: the active profile's `.env`, resolved by the loader; elsewhere: that harness's own config or the process env) — never committed, never read from another runtime's directory. See [`mcp/jev/env.example`](https://github.com/ronail/jev-cost-guard/blob/main/mcp/jev/env.example).
