@@ -664,13 +664,57 @@ PLUGIN_DATA=<the plugin data directory> python3 <plugin-root>/mcp/jev/server.py 
 With no key at all the server stays on the keyless OpenCode Zen relay (`Bearer
 public`, `jev-1.13-free`), so the tools answer before any key is configured.
 
-**No PostToolUse gate here — by evidence, not by omission.** Antigravity's
-`PostToolUse` payload is `toolCall{name,args}` + `stepIdx` + `error` + `transcriptPath`;
-it does **not** carry the tool output. Judging that output would mean either scraping
-the internal `transcript.jsonl` or returning `{"overwriteResult": …}` — and the second
-is the payload replacement this plugin refuses. So on Antigravity jev is called on
-demand (by the model, or by a skill), and the soft gate stays a Claude Code / Codex
-feature.
+Verified live in a `agy -p` session, not inferred from the install: the model reached
+for the plugin's server as `call_mcp_tool` with `ServerName: "jev-cost-guard_jev"` and
+`ToolName: "jev_health"`, and the tool answered
+
+```text
+[jev] ok: model=jev-1.13.0 endpoint=https://api.typesafe.ai/v1/systemone -> alive
+```
+
+#### Hooks run — a bundled `hooks.json` is enough
+
+Measured with a probe plugin that logged every payload (`agy` 1.2.12, `agy -p`): all six
+events fire, `SessionStart` → `PreInvocation` → `PreToolUse` → `PostToolUse` →
+`PostInvocation` → `Stop`, from a plugin's own `hooks.json` — no trust step, no
+config-layer declaration, no `/hooks` review. That is the opposite of Codex, where a
+plugin-bundled hook never registers.
+
+What each payload carries (real keys, nothing omitted):
+
+| event | keys |
+|---|---|
+| `SessionStart` | `conversationId`, `workspacePaths`, `transcriptPath`, `artifactDirectoryPath`, `modelName` |
+| `PreToolUse` | `toolCall{name,args}`, `stepIdx`, + common |
+| `PostToolUse` | `toolCall{name,args}`, `stepIdx`, `error`, `lastUserInput`, + common |
+| `PreInvocation`/`PostInvocation` | `invocationNum`, `initialNumSteps`, + common |
+| `Stop` | `executionNum`, `terminationReason`, `fullyIdle`, `error`, + common |
+
+Two traps found the hard way:
+
+- **`PreToolUse` must answer `{"decision": …}`.** Returning `{}` is treated as a **deny**
+  — the run failed with `tool call denied by pre-tool hook` and the model reported the
+  blocked command instead.
+- **Tool names are not the documented ones.** The CLI sent `name: "read_file"` with
+  `args.Path` (the App/IDE vocabulary in the docs is `view_file` with `args.AbsolutePath`)
+  and MCP through `name: "call_mcp_tool"` with `args.ServerName` + `args.ToolName`. A
+  matcher written from the docs alone therefore misses calls; use `.*` or cover both.
+
+#### Why there is still no jev verdict gate here
+
+`PostToolUse` fires **after** the tool and carries no output — only `toolCall{name,args}`,
+`error`, and a `transcriptPath`. So the body the gate exists to judge is not in the
+event. Judging it would mean either scraping the internal transcript
+(`<app_data_dir>/brain/<conversationId>/.system_generated/logs/transcript_full.jsonl`,
+an undocumented format that already changed name once) or returning
+`{"overwriteResult": …}`, which is the payload replacement this plugin refuses. On
+Antigravity jev is therefore called on demand (by the model, or by a skill), and the
+soft gate stays a Claude Code / Codex feature.
+
+What *is* worth building here, if you want a hook: `PreToolUse` is a real permission
+gate (it can `deny`/`ask`/`overwrite` arguments before the call) and `Stop` is a real
+completion gate (`{"decision": "continue"}` re-enters the loop) — both see enough to
+decide without the payload. Neither ships yet.
 
 **Measure the roster** with the portable estimator, which knows Antigravity's roots
 and skips plugins `agy plugin disable` took out — local files only, no `agy` call:
