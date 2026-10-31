@@ -31,6 +31,8 @@ prerequisite: if your harness is not listed, use its nearest equivalent.
 | fetch a URL with a byte bound | `web_extract(char_limit=…)` | WebFetch | fetch tool (else `curl -r 0-N`) |
 | **native fixed-prompt measurement** | `hermes prompt-size --json` | *none* | *none* |
 | fallback measurement (works everywhere) | `python3 scripts/prompt_budget.py` | same | same |
+| run a bundled plugin script | `terminal` / `execute_code` | Bash | shell tool |
+| toggle the jev analytics report | `python3 ${PLUGIN_ROOT}/scripts/jev_analytics.py on` (marker file; no env var, no config edit) | same | same |
 | prune the skills index | `skills.auto_load` / `skills.disabled` in the profile `config.yaml` | remove/disable the skill dir or its plugin | move the skill dir out of the skills root; disable the plugin |
 | start a scoped session with fewer skills | `hermes -p <p> chat -s A -s B` | point the skill dir at a scoped set | fresh `codex exec` after pruning |
 | drop/compact the transcript | `/compress`, `/new` | `/compact` | `/new` |
