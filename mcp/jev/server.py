@@ -1374,6 +1374,61 @@ def _cli_verdict() -> None:
                       "noul": n, "interpretation": interp}))
 
 
+def _cli_ask() -> None:
+    """One-shot CLI: run arbitrary typed questions against a state on stdin.
+
+    The `--verdict` verb is welded to one question (`is_successful`), which is the
+    right shape for a post-hoc tool-output gate and the wrong shape for every other
+    gate: a command-risk question is a `choice`, a completion check is a `noul` over
+    assembled evidence. Hook scripts cannot host the MCP server, so this verb is how
+    they ask the *other* questions — same auth, same paid fallback, same 20k cap as
+    `--verdict`.
+
+    Usage:
+      python3 server.py --ask --questions '<questions-json>'  < state
+
+    `--questions` is the System One questions map exactly as the API takes it
+    (`{"<key>": {"type": ..., "instructions": ..., "criteria": ...}}`), so question
+    wording lives with the gate that owns it, not in this file.
+
+    Prints one JSON line: {"ok": true, "model", "endpoint", "answers", "usage"} or
+    {"ok": false, "error"} — never raises, because a hook's fail-open path depends
+    on a parseable answer.
+    """
+    argv = sys.argv[2:]
+    raw_questions = None
+    for i, arg in enumerate(argv):
+        if arg == "--questions" and i + 1 < len(argv):
+            raw_questions = argv[i + 1]
+        elif arg.startswith("--questions="):
+            raw_questions = arg.split("=", 1)[1]
+    if not raw_questions:
+        print(json.dumps({"ok": False, "error": "--questions JSON is required"}))
+        return
+    try:
+        questions = json.loads(raw_questions)
+    except json.JSONDecodeError as e:
+        print(json.dumps({"ok": False, "error": f"bad --questions JSON: {e}"}))
+        return
+    if not isinstance(questions, dict) or not questions:
+        print(json.dumps({"ok": False, "error": "--questions must be a non-empty object"}))
+        return
+    state = sys.stdin.buffer.read().decode("utf-8", "replace")[:20000]
+    try:
+        answers = _systemone_post(state, questions, _retry_paid=True)
+    except RuntimeError as e:
+        if os.environ.get("JEV_DEBUG"):
+            sys.stderr.write(f"[jev-debug] {e}\n")
+        print(json.dumps({"ok": False, "error": str(e)}))
+        return
+    except Exception as e:  # noqa: BLE001 — a hook must always get a JSON line
+        print(json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}))
+        return
+    endpoint, model, _ = _resolve_jev_target()
+    print(json.dumps({"ok": True, "model": model, "endpoint": endpoint,
+                      "answers": answers}))
+
+
 def _cli_set_key(argv: list[str]) -> None:
     """Store the TypeSafe key in the credential file (0600).
 
@@ -1482,6 +1537,8 @@ if __name__ == "__main__":
     _a = sys.argv[1:]
     if _a and _a[0] in ("--verdict", "-v"):
         _cli_verdict()
+    elif _a and _a[0] == "--ask":
+        _cli_ask()
     elif _a and _a[0] == "--set-key":
         _cli_set_key(_a[1:])
     elif _a and _a[0] == "--key-status":
