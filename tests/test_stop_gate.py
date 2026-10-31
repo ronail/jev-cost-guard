@@ -361,3 +361,22 @@ def test_the_observed_antigravity_write_tool_name_counts_as_a_mutation():
     assert gates.is_mutating_tool("some_new_edit_tool")
     assert not gates.is_mutating_tool("read_file")
     assert not gates.is_mutating_tool("jev_find")
+
+
+def test_turn_slice_is_the_baseline_the_gate_saves_against():
+    """A stop gate's honest baseline is the turn, not the session file."""
+    events = [
+        {"kind": "prompt", "text": "first request"},
+        {"kind": "assistant_text", "text": "a"},
+        {"kind": "prompt", "text": "second request"},
+        {"kind": "tool_call", "name": "write_file", "args": {"path": "a.txt"}},
+        {"kind": "assistant_text", "text": "Done, it works."},
+    ]
+    task, turn = transcript.turn_slice(events)
+    assert task == "second request"
+    assert [e["kind"] for e in turn] == ["tool_call", "assistant_text"]
+
+
+def test_turn_slice_without_a_prompt_takes_everything():
+    task, turn = transcript.turn_slice([{"kind": "assistant_text", "text": "hi"}])
+    assert task == "" and len(turn) == 1

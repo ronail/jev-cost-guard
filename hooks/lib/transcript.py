@@ -123,6 +123,22 @@ def read_events(path: str) -> list[dict]:
     return events
 
 
+def turn_slice(events: list[dict]) -> tuple[str, list[dict]]:
+    """The final user request and everything that happened after it.
+
+    Exposed because a stop gate's honest baseline is *this* slice: the turn's own
+    events, not the whole session file. Comparing one turn's state against a 46 MB
+    session would flatter the gate by three orders of magnitude.
+    """
+    last_prompt = -1
+    for index, event in enumerate(events):
+        if event.get("kind") == "prompt":
+            last_prompt = index
+    if last_prompt < 0:
+        return "", list(events)
+    return str(events[last_prompt].get("text") or ""), events[last_prompt + 1:]
+
+
 def turn_facts(events: list[dict]) -> dict:
     """What the final turn asked for, changed, checked, and claimed.
 
@@ -131,12 +147,7 @@ def turn_facts(events: list[dict]) -> dict:
     A check counts as passing only when its *output* says so — a failing suite is
     recorded with no error flag on both hosts, so exit status alone would lie.
     """
-    last_prompt = -1
-    for index, event in enumerate(events):
-        if event.get("kind") == "prompt":
-            last_prompt = index
-    turn = events[last_prompt + 1:] if last_prompt >= 0 else list(events)
-    task = str(events[last_prompt]["text"]) if last_prompt >= 0 else ""
+    task, turn = turn_slice(events)
 
     file_changes = 0
     last_mutation = -1
