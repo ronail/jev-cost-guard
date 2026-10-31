@@ -77,9 +77,10 @@ sessions make more calls).
 
 ## Per-turn analytics (opt-in, `jev-analytics`)
 
-`scripts/jev_analytics.py on` flips a marker file; from then on every jev tool
-call appends one measured row (`body_chars`, jev's own `usage`, the verdict
-size) and the turn ends with a ~45-token report:
+Every jev tool call appends one measured row (`body_chars`, jev's own `usage`,
+the verdict size) and its result ends with a compact `[jev in=… out=…]` suffix, so
+a tool result is self-describing in any harness. Asking for a report is the only
+opt-in; the turn then ends with ~45 tokens:
 
 ```
 jev analytics · 1 call (est.)

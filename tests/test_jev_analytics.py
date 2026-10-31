@@ -1,14 +1,14 @@
-"""jev analytics: the switch, the ledger, the report, and the price rules.
+"""jev analytics: the ledger, the report, and the price rules.
 
-The switch is a marker file because a skill cannot toggle itself, so these tests
-pin three things that break silently otherwise: the script and the MCP server
-must resolve the *same* state directory, an off install must write nothing, and
-the report must never invent a price (official DeepSeek list price or `$ n/a`).
+There is no switch: the MCP server records every jev call and appends an
+`in=/out=` suffix, so these tests pin the things that break silently — the script
+and the server must resolve the *same* ledger path, an unmeasured call must not be
+recorded as zero, the ledger must stay bounded without a `report`, and the report
+must never invent a price (official DeepSeek list price or `$ n/a`).
 """
 from __future__ import annotations
 
 import importlib.util
-import json
 import os
 import time
 from pathlib import Path
@@ -55,11 +55,7 @@ def _row(**kw):
     return row
 
 
-def _seed(script, rows):
-    script.write_rows(rows)
-
-
-# ── state parity between the script and the MCP server ────────────────────────
+# ── ledger path parity between the script and the MCP server ──────────────────
 
 
 def test_dir_parity_explicit(script, srv, monkeypatch, tmp_path):
@@ -85,25 +81,6 @@ def test_ledger_honours_jev_call_log(script, srv, monkeypatch, tmp_path):
     monkeypatch.setenv("JEV_CALL_LOG", str(target))
     assert script.ledger_path() == str(target)
     assert srv._analytics_ledger() == str(target)
-
-
-# ── the switch ────────────────────────────────────────────────────────────────
-
-
-def test_on_off_status(script, capsys):
-    assert script.is_on() is False
-    assert script.main(["on"]) == 0
-    assert script.is_on() is True
-    assert script.main(["status", "--json"]) == 0
-    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert payload["on"] is True and payload["rows"] == 0
-    assert script.main(["off"]) == 0
-    assert script.is_on() is False
-
-
-def test_off_is_idempotent(script):
-    assert script.main(["off"]) == 0
-    assert script.is_on() is False
 
 
 # ── the report ────────────────────────────────────────────────────────────────
@@ -158,15 +135,13 @@ def test_report_empty_is_empty(script):
     assert script.build_report([], model="deepseek-v4.1-flash") == ""
 
 
-def test_cli_report_silent_when_off(script, capsys):
-    _seed(script, [_row()])
+def test_cli_report_silent_with_no_rows(script, capsys):
     assert script.main(["report"]) == 1
     assert capsys.readouterr().out == ""
 
 
 def test_cli_report_prints_then_clears(script, capsys):
-    script.main(["on"])
-    _seed(script, [_row()])
+    script.write_rows([_row()])
     assert script.main(["report", "--model", "deepseek-v4.1-flash"]) == 0
     out = capsys.readouterr().out
     assert "jev analytics · 1 call" in out
@@ -174,43 +149,44 @@ def test_cli_report_prints_then_clears(script, capsys):
 
 
 def test_cli_report_keep_retains_rows(script):
-    script.main(["on"])
-    _seed(script, [_row()])
+    script.write_rows([_row()])
     assert script.main(["report", "--keep"]) == 0
     assert len(script.read_rows()) == 1
 
 
 def test_stale_rows_are_not_this_turn(script, capsys):
-    script.main(["on"])
-    capsys.readouterr()  # discard the `on` banner
-    _seed(script, [_row(ts=time.time() - 4000)])
+    script.write_rows([_row(ts=time.time() - 4000)])
     assert script.main(["report"]) == 1
     assert capsys.readouterr().out == ""
     assert script.read_rows() == []
 
 
 def test_drop_retracts_a_row(script):
-    script.main(["on"])
-    _seed(script, [_row(tool="find"), _row(tool="summarize")])
+    script.write_rows([_row(tool="find"), _row(tool="summarize")])
     assert script.main(["drop", "1"]) == 0
     rows = script.read_rows()
     assert len(rows) == 1 and rows[0]["tool"] == "summarize"
 
 
 def test_drop_out_of_range(script):
-    script.main(["on"])
-    _seed(script, [_row()])
+    script.write_rows([_row()])
     assert script.main(["drop", "7"]) == 2
     assert len(script.read_rows()) == 1
+
+
+def test_clear_empties_the_ledger(script):
+    script.write_rows([_row(), _row()])
+    assert script.main(["clear"]) == 0
+    assert script.read_rows() == []
 
 
 # ── the MCP server side ───────────────────────────────────────────────────────
 
 
-def test_note_writes_a_row_when_on(script, srv):
-    script.main(["on"])
+def test_record_writes_a_row_and_returns_suffix(script, srv):
     srv._USAGE.update({"in": 291, "out": 24, "model": "jev-1.13-free"})
-    assert srv._analytics_note("summarize", 20000, "verdict!") == " [ja]"
+    suffix = srv._analytics_record("summarize", 20000, "verdict!")
+    assert suffix == " [jev in=291 out=24]"
     rows = script.read_rows()
     assert len(rows) == 1
     assert rows[0]["body_chars"] == 20000
@@ -219,40 +195,34 @@ def test_note_writes_a_row_when_on(script, srv):
     assert rows[0]["model"] == "jev-1.13-free"
 
 
-def test_note_is_silent_and_writes_nothing_when_off(script, srv):
-    assert script.is_on() is False
-    assert srv._analytics_note("summarize", 20000, "verdict") == ""
-    assert not os.path.exists(script.ledger_path())
+def test_unmeasured_call_records_nothing(script, srv):
+    """A dry run / failed call has no usage: no row, no suffix, no fabricated zeros."""
+    srv._usage_pop()
+    assert srv._analytics_record("find", 9000, "rendered") == ""
+    assert script.read_rows() == []
 
 
-def test_note_resets_usage_between_calls(script, srv):
-    script.main(["on"])
+def test_record_resets_usage_between_calls(script, srv):
     srv._USAGE.update({"in": 100, "out": 20, "model": "jev-1.13-free"})
-    srv._analytics_note("find", 10, "x")
-    srv._analytics_note("find", 10, "x")
+    srv._analytics_record("find", 10, "x")
+    srv._analytics_record("find", 10, "x")
     rows = script.read_rows()
-    assert [r["jev_in"] for r in rows] == [100, 0]
+    assert [r["jev_in"] for r in rows] == [100]  # the second had no usage
 
 
-def test_summarize_appends_marker_and_row(script, srv, monkeypatch):
-    script.main(["on"])
+def test_summarize_appends_suffix_and_row(script, srv, monkeypatch):
     monkeypatch.setattr(srv, "_jev_ask", lambda **kw: {"noul": 0.88})
+    srv._USAGE.update({"in": 500, "out": 24, "model": "jev-1.13-free"})
     text = srv._tool_summarize({"text": "x" * 4000})
-    assert text.endswith("[ja]")
+    assert text.endswith("[jev in=500 out=24]")
     rows = script.read_rows()
     assert len(rows) == 1 and rows[0]["body_chars"] == 4000
     assert rows[0]["noul"] == 0.88
 
 
-def test_summarize_off_has_no_marker(srv, monkeypatch):
-    monkeypatch.setattr(srv, "_jev_ask", lambda **kw: {"noul": 0.88})
-    assert not srv._tool_summarize({"text": "x" * 4000}).endswith("[ja]")
-
-
-def test_note_records_billable_flag(script, srv):
-    script.main(["on"])
+def test_record_records_billable_flag(script, srv):
     srv._USAGE.update({"in": 5, "out": 1, "model": "jev-1.13.0", "billable": True})
-    srv._analytics_note("summarize", 100, "v")
+    srv._analytics_record("summarize", 100, "v")
     assert script.read_rows()[0]["billable"] is True
 
 
@@ -261,6 +231,20 @@ def test_usage_add_ignores_garbage(srv):
     srv._usage_add(None)
     srv._usage_add({"input_tokens": "nope", "output_tokens": 3})
     assert srv._USAGE["in"] == 0 and srv._USAGE["out"] == 3
+
+
+def test_ledger_is_trimmed_when_it_grows(script, srv, monkeypatch):
+    """With no report to clear it, the ledger must stay bounded on its own."""
+    monkeypatch.setattr(srv, "_LEDGER_MAX_BYTES", 2000)
+    monkeypatch.setattr(srv, "_LEDGER_KEEP_LINES", 5)
+    for i in range(40):
+        srv._USAGE.update({"in": i, "out": 1, "model": "jev-1.13-free"})
+        srv._analytics_record("summarize", 100, "v")
+    rows = script.read_rows()
+    # 40 appends cannot all survive, and growth is capped at max_bytes + one row.
+    assert 0 < len(rows) < 40
+    assert rows[-1]["jev_in"] == 39  # the tail survives the trim
+    assert os.path.getsize(script.ledger_path()) <= 2000 + 400
 
 
 # ── pricing ───────────────────────────────────────────────────────────────────

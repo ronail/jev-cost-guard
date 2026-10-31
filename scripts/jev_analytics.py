@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """jev analytics: a switchable per-turn cost report for the jev MCP tools.
 
-The switch is a marker file, because a skill cannot toggle itself: SKILL.md is
-static prompt text, and no harness lets a model unload a skill mid-turn. One
-`stat()` decides whether the MCP server records calls and whether `report`
-prints anything.
+There is no switch to flip here. The MCP server records every jev call and
+appends an `in=/out=` suffix to the tool result, so the numbers always exist;
+"turning analytics on" means asking for a report, and this script only formats
+one. That keeps the cost of a jev call a property of the call rather than a
+property of a reporting setting.
 
-    python3 scripts/jev_analytics.py on|off|status
     python3 scripts/jev_analytics.py report --model deepseek-v4.1-flash
     python3 scripts/jev_analytics.py drop 1        # row 1 was not a real save
     python3 scripts/jev_analytics.py clear
 
-State (marker + ledger) lives in, in order:
+The ledger lives in, in order:
 
     $JEV_ANALYTICS_DIR                 explicit
     $PLUGIN_DATA/analytics             host-provided plugin data dir
@@ -54,7 +54,6 @@ import sys
 import time
 
 CHARS_PER_TOKEN = 4.0
-MARKER_NAME = "enabled"
 LEDGER_NAME = "calls.jsonl"
 DEFAULT_MAX_AGE = 1800  # rows older than 30 min are a leaked turn, not this one
 
@@ -93,19 +92,11 @@ def analytics_dir() -> str:
     return os.path.join(base, "jev-cost-guard")
 
 
-def marker_path() -> str:
-    return os.path.join(analytics_dir(), MARKER_NAME)
-
-
 def ledger_path() -> str:
     explicit = (os.environ.get("JEV_CALL_LOG") or "").strip()
     if explicit:
         return os.path.expanduser(explicit)
     return os.path.join(analytics_dir(), LEDGER_NAME)
-
-
-def is_on() -> bool:
-    return os.path.exists(marker_path())
 
 
 # ── ledger ────────────────────────────────────────────────────────────────────
@@ -263,15 +254,10 @@ def build_report(rows: list[dict], model: str = "",
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="jev_analytics.py",
-        description="Toggle and read jev's per-turn cost telemetry.",
+        description="Read jev's recorded per-turn cost telemetry.",
         epilog="Official DeepSeek list prices only; other models print $ n/a.",
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
-
-    sub.add_parser("on", help="record jev calls and enable the report")
-    sub.add_parser("off", help="silence everything (no ledger writes)")
-    p_status = sub.add_parser("status", help="print on/off and the state path")
-    p_status.add_argument("--json", action="store_true")
 
     p_report = sub.add_parser("report", help="print this turn's report")
     p_report.add_argument("--model", default="",
@@ -293,33 +279,6 @@ def main(argv: list[str] | None = None) -> int:
 
     args = ap.parse_args(argv)
 
-    if args.cmd in {"on", "off"}:
-        path = marker_path()
-        if args.cmd == "on":
-            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(json.dumps({"since": round(time.time(), 3)}) + "\n")
-            print(f"jev analytics: on ({path})")
-        else:
-            try:
-                os.remove(path)
-            except FileNotFoundError:
-                pass
-            print("jev analytics: off")
-        return 0
-
-    if args.cmd == "status":
-        on = is_on()
-        if args.json:
-            print(json.dumps({"on": on, "marker": marker_path(),
-                              "ledger": ledger_path(),
-                              "rows": len(read_rows())}))
-        else:
-            state = "on" if on else "off"
-            print(f"jev analytics: {state}\n  marker  {marker_path()}"
-                  f"\n  ledger  {ledger_path()}")
-        return 0
-
     if args.cmd == "clear":
         write_rows([])
         print(f"jev analytics: cleared {ledger_path()}")
@@ -336,11 +295,9 @@ def main(argv: list[str] | None = None) -> int:
         write_rows(rows)
         print(f"jev analytics: dropped row {args.index} "
               f"({removed.get('tool', '?')}, "
-              f"{int(removed.get('body_bytes') or 0):,} B)")
+              f"{int(removed.get('body_chars') or 0):,} chars)")
         return 0
 
-    if not is_on():
-        return 1
     rows, leaked = stale(read_rows(), args.max_age)
     text = build_report(rows, args.model, args.price_in, args.price_out)
     if not args.keep:
