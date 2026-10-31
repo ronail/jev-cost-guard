@@ -353,3 +353,30 @@ def test_antigravity_wires_pretooluse_group():
     group = wiring["jev-pretool-gate"]
     assert group["PreToolUse"][0]["hooks"][0]["command"].endswith('hooks/pretool-gate.py"')
     assert set(wiring) >= {"jev-verdict", "jev-skill-hint", "jev-pretool-gate"}
+
+
+# The corpus that produced this list is in scripts/gate_token_samples.py; four of its
+# twelve accidents went unrecognised before these belts existed, which is the whole
+# reason a gate is measured against ordinary commands instead of invented ones.
+@pytest.mark.parametrize(("command", "label"), [
+    ("TRUNCATE audit_log;", "database drop"),
+    ("psql -c 'DELETE FROM orders'", "database drop"),
+    ("dropdb production", "database drop"),
+    ("find . -name '*.log' -delete", "bulk delete by find"),
+    ("kill -9 1234", "process kill"),
+    ("killall -TERM node", "process kill"),
+])
+def test_the_accidents_a_measured_corpus_found_are_caught(command, label):
+    assert label in gates.command_reasons(command)
+
+
+@pytest.mark.parametrize("command", [
+    "git status --short",
+    "python3 -m pytest tests -q",
+    "rg -n 'TODO' src/",
+    "cat package.json",
+    "npm run build",
+    "curl -sSL https://example.com",
+])
+def test_ordinary_work_still_costs_nothing(command):
+    assert gates.command_reasons(command) == []
