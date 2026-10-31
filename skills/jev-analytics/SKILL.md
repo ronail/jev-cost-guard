@@ -10,36 +10,28 @@ metadata:
 
 # jev-analytics
 
-A reporting overlay on top of the jev MCP, not a policy. When the switch is
-**on**, jev's cost and the tokens it avoided become visible; when it is **off**,
-this skill must produce zero output and zero extra calls. Concrete tool names per
-harness are in [docs/harness-adapters.md](https://github.com/ronail/jev-cost-guard/blob/main/docs/harness-adapters.md).
+A reporting overlay on top of the jev MCP, not a policy. There is no switch in
+the MCP: every jev tool result already ends with its measured cost
+(`[jev in=2038 out=24]`) and every call is already recorded. "Turning analytics
+on" only means **you owe a report at the end of the turn**. Nothing to configure,
+no script to run, no state to check.
+
+- user asked for it → steps 2–5 apply, print the report each turn jev ran;
+- user never asked → judge on your own as usual, print nothing, call nothing extra.
+
+Concrete tool names per harness are in
+[docs/harness-adapters.md](https://github.com/ronail/jev-cost-guard/blob/main/docs/harness-adapters.md).
 
 ## 0. Switching it on and off
 
 The user never runs a script and never edits config. When they say any of
-*"jev analytics on"*, *"turn on analytics"*, *"show jev cost"* — or the opposite
-— you run it for them:
+*"jev analytics on"*, *"turn on analytics"*, *"show jev cost"* — or the opposite —
+acknowledge in one line (`jev analytics: on`) and continue with the task. Keep it
+for the rest of the session; do not ask them to repeat it every turn.
 
-```sh
-python3 "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-.}}/scripts/jev_analytics.py" on
-python3 "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-.}}/scripts/jev_analytics.py" off
-```
-
-Say one line back (`jev analytics: on`) and continue with the task. If the
-script is missing, say so once and carry on — never fall back to estimating the
-numbers yourself.
-
-## 1. Is it on? Ask the last jev response, don't poll
-
-Every jev tool result ends in `[ja]` when analytics is on, because the MCP server
-writes the ledger itself. That marker is the whole switch:
-
-- response ends in `[ja]` → analytics is on → steps 2–6 apply;
-- no marker → off → stop here, say nothing about cost, make no extra call.
-
-Never run `status` to find out. The marker costs 1 token per jev call; a status
-call costs a round-trip every turn.
+If they say off, or the reporting is getting in the way, print nothing from then
+on. The ledger keeps recording either way — that is ordinary jev telemetry, not
+a report.
 
 ## 2. Before acting: give jev the first attempt at anything decidable
 
@@ -106,8 +98,7 @@ effect: jev's 0.88 changed the plan — read config.py first, skipped the other 
 ```
 
 Keep the block last, after your answer, so it never pushes the answer down. If
-`report` prints nothing (exit 1), print nothing — that is the off case and the
-"no rows this turn" case, and both are silent.
+`report` prints nothing (exit 1), print nothing: there were no calls to report.
 
 ## 5. Retract a row that was not a real save
 
@@ -139,11 +130,14 @@ reseller guess would be off by up to 40×.
 | situation | response |
 |---|---|
 | script missing / not executable | say `jev analytics: script unavailable` once, stop reporting, keep working |
-| `report` exits 1 with no output | print nothing — off, or no call this turn |
+| `report` exits 1 with no output | print nothing — no jev call to report |
 | jev unreachable | the tool already returned the error; there is no row, so no report |
 | report would say `saved: -N tok` | print it. A loss is information: the body was too small for a jev call |
 
 ## Cost of this skill
 
-~1.3 KB of index line, and a ~45-token block on turns where jev actually ran.
-If you never enable it, prune it from the roster like any other unused skill.
+~150 B of index line, and a ~45-token block on turns where jev actually ran. The
+`in=/out=` suffix the MCP server appends (~5 tokens per jev call) is paid whether
+or not this skill is loaded — it is a property of the tool result, not of the
+report. If you never report, prune this skill from the roster; the tool is still
+self-describing without it.

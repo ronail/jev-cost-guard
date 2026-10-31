@@ -425,13 +425,15 @@ def _resolve_jev_target() -> tuple[str, str, str | None]:
     return endpoint, model, key
 
 
-# ── analytics ledger (off unless scripts/jev_analytics.py said `on`) ───────────
-# The switch is a marker FILE, not an env var: an agent turn cannot export one,
-# and a skill cannot unload itself. One stat() per jev tool call decides whether
-# a row is written; with no marker nothing is recorded and the tool text is
-# byte-identical to the pre-analytics server.
-_ANALYTICS_MARKER = "enabled"
+# ── analytics ledger (always on; the *report* is the opt-in part) ──────────────
+# jev reports its own `usage` on every System One response, so a tool result is
+# self-describing: every call records one row and appends a compact in=/out=
+# suffix. Nothing here is gated by a marker file — whether a report is printed is
+# the model's decision, driven by the user asking for one. That keeps the cost of
+# a jev call a property of the call instead of a property of a reporting setting.
 _USAGE: dict = {"in": 0, "out": 0, "model": None, "billable": False}
+_LEDGER_MAX_BYTES = 256 * 1024
+_LEDGER_KEEP_LINES = 100
 
 
 def _analytics_dir() -> str:
@@ -447,10 +449,6 @@ def _analytics_dir() -> str:
         os.path.expanduser("~"), ".local", "state"
     )
     return os.path.join(base, "jev-cost-guard")
-
-
-def _analytics_on() -> bool:
-    return os.path.exists(os.path.join(_analytics_dir(), _ANALYTICS_MARKER))
 
 
 def _analytics_ledger() -> str:
@@ -479,16 +477,16 @@ def _usage_pop() -> dict:
     return used
 
 
-def _analytics_note(tool: str, body_chars: int, verdict_text: str,
-                    noul=None) -> str:
-    """Append one ledger row when analytics is on; return the `[ja]` marker.
+def _analytics_record(tool: str, body_chars: int, verdict_text: str,
+                      noul=None) -> str:
+    """Record one measured row and return the `in=/out=` suffix for the caller.
 
-    Returns "" (and writes nothing) when the marker is absent. The suffix is the
-    model's only signal that a report is owed at the end of the turn, so it does
-    not have to poll the switch on every call.
+    Always on, and returns "" only when jev reported no usage at all (a failed
+    call, or a `dry_run` that never reached jev) — an unmeasured call is not
+    recorded rather than recorded as zero.
     """
     used = _usage_pop()
-    if not _analytics_on():
+    if not used.get("in") and not used.get("out"):
         return ""
     row = {
         "ts": round(time.time(), 3),
@@ -501,14 +499,31 @@ def _analytics_note(tool: str, body_chars: int, verdict_text: str,
         "verdict_chars": len(verdict_text or ""),
         "noul": noul,
     }
+    _analytics_append(row)
+    return f" [jev in={row['jev_in']} out={row['jev_out']}]"
+
+
+def _analytics_append(row: dict) -> None:
     path = _analytics_ledger()
     try:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, separators=(",", ":")) + "\n")
+        if os.path.getsize(path) > _LEDGER_MAX_BYTES:
+            _analytics_trim(path)
     except OSError:
-        return ""  # telemetry must never sink a jev call
-    return " [ja]"
+        pass  # telemetry must never sink a jev call
+
+
+def _analytics_trim(path: str) -> None:
+    """Keep the ledger bounded when nobody ever calls `report` to clear it."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()[-_LEDGER_KEEP_LINES:]
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.writelines(lines)
+    except OSError:
+        pass
 
 
 def _jev_ask(state: str, question: str, qtype: str = "noul",
@@ -773,7 +788,7 @@ def _tool_summarize(arguments: dict | None) -> str:
             f"(jev is a decision model; ~fixed output tokens, not a text digest; "
             f"budget_tokens={budget} is advisory)"
         )
-        return verdict + _analytics_note("summarize", len(text), verdict, n)
+        return verdict + _analytics_record("summarize", len(text), verdict, n)
     except RuntimeError as e:
         return f"[jev] {e}"
     except Exception as e:  # noqa: BLE001
@@ -1125,7 +1140,7 @@ def _tool_find(arguments: dict | None) -> str:
     )
     rendered = "\n".join(lines)
     screened_chars = 0 if dry_run else sum(sizes.values())
-    return rendered + _analytics_note("find", screened_chars, rendered)
+    return rendered + _analytics_record("find", screened_chars, rendered)
 
 
 _SCREEN_MAX_FILES = 20
@@ -1303,7 +1318,7 @@ def _tool_screen(arguments: dict | None) -> str:
     )
     rendered = "\n".join(lines)
     screened_chars = 0 if dry_run else sum(len(t) for _l, _p, t in items)
-    return rendered + _analytics_note("screen", screened_chars, rendered)
+    return rendered + _analytics_record("screen", screened_chars, rendered)
 
 
 _TOOLS = {
