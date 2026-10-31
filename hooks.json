@@ -1,0 +1,21 @@
+{
+  "jev-verdict": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python3 \"./hooks/antigravity-jev-verdict.py\"",
+        "timeout": 30
+      }
+    ]
+  },
+  "jev-skill-hint": {
+    "enabled": false,
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python3 \"./hooks/antigravity-jev-route.py\"",
+        "timeout": 15
+      }
+    ]
+  }
+}
