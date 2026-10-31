@@ -34,8 +34,9 @@ Every step below is a *capability*. Concrete tool and command names per harness
    # i.e. from a checkout: python3 scripts/prompt_budget.py
    ```
 
-   (`PLUGIN_ROOT` is set by Codex for plugin-provided files, `CLAUDE_PLUGIN_ROOT` by
-   Claude Code; with neither set, run it from the plugin checkout.)
+   (`PLUGIN_ROOT` is set by Codex and Antigravity for plugin-provided files,
+   `CLAUDE_PLUGIN_ROOT` by Claude Code; with neither set, run it from the plugin
+   checkout.)
 
    or, with no checkout available (any python3, no harness CLI):
 
