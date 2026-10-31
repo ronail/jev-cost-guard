@@ -35,6 +35,7 @@ prerequisite: if your harness is not listed, use its nearest equivalent.
 | start a scoped session with fewer skills | `hermes -p <p> chat -s A -s B` | point the skill dir at a scoped set | fresh `codex exec` after pruning | point `.agents/skills` at a scoped set |
 | drop/compact the transcript | `/compress`, `/new` | `/compact` | `/new` | start a new conversation (no documented compact command) |
 | auto-gate a large tool result | native companion hook (`native/skill-router`, optional) | `PostToolUse` hook | `PostToolUse` hook, declared in `config.toml` | `PreInvocation` hook + transcript read (its `PostToolUse` has no output) |
+| **pre-tool permission gate** | `pre_tool_call` (policy hook, can veto) | `PreToolUse` — `permissionDecision: allow/deny/ask` | `PreToolUse` — no `ask`, so map it to a `systemMessage` | `PreToolUse` — `decision: allow/ask/force_ask/deny`, plus `overwrite` and `permissionOverrides` |
 
 `hermes prompt-size --json` is authoritative **only when you are Hermes**. Every
 other harness has no native prompt-size command, so the portable estimator is the

@@ -17,5 +17,19 @@
         "timeout": 15
       }
     ]
+  },
+  "jev-pretool-gate": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"./hooks/pretool-gate.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
   }
 }

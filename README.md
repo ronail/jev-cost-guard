@@ -236,6 +236,9 @@ faster it pays off. No other model is involved.
 | `hooks/claude-codex-jev-verdict.py` | standalone soft-gate hook for Claude Code / Codex |
 | `hooks/antigravity-jev-verdict.py` | Antigravity gate: reads the transcript on `PreInvocation`, injects one verdict line |
 | `hooks/antigravity-jev-route.py` | Antigravity skill hint (opt-in, `"enabled": false`): one roster line per session |
+| `hooks/pretool-gate.py` | pre-tool permission gate for Claude Code / Codex / Antigravity: belts → one jev request → ask/deny, audit by default |
+| `hooks/lib/gates.py` | the pure half: question wording, thresholds, belts, `decide_command`, `decide_completion` |
+| `hooks/gate-policy.json` | one policy for every gate and host: mode, thresholds, state cap, cache TTL, allow mode |
 | `hooks.json` | Antigravity plugin wiring for that gate (root — Antigravity reads no other path) |
 | `scripts/install-antigravity.py` | no-plugin workspace install: `.agents/mcp_config.json` + `.agents/hooks.json`, merged |
 | `hooks/hooks.json` | Claude Code plugin wiring for that gate (PostToolUse) |
@@ -627,6 +630,56 @@ Codex surfaces jev tools natively. For the **auto-gate**, the plugin already wir
 `hooks/hooks.json`; a manual install can point a tool-result hook at
 `hooks/claude-codex-jev-verdict.py` with the same env. Same soft-gate semantics: verdict
 logged, exits 0.
+
+## The pre-tool gate: a permission judgement, not a verdict
+
+`PostToolUse` answers "was that output good?" after the bytes are already paid for.
+`PreToolUse` answers a different question — **should this command run at all** — and it
+can stop it. `hooks/pretool-gate.py` runs there on Claude Code, Codex and Antigravity, in
+each host's own vocabulary, and it is **audit-only by default**.
+
+Three tiers, cheapest first:
+
+| tier | what it is | cost |
+|---|---|---|
+| 0 | deterministic belts (`RISK_BELTS`: recursive delete, history rewrite, `DROP TABLE`, `dd of=`, global install, publish/deploy, remote copy, network upload, pipe-to-shell, `sudo`, container/system wipe, credential read) | free — a routine command (`npm test`, `git status`, `rg`) never leaves this tier |
+| 1 | one jev request, two questions: a `choice` risk call (allow / ask / deny) + a `noul` "destroys state outside the working tree?" cross-check | ~1 s, one request, only for commands tier 0 flagged |
+| 2 | per-session cache (1 h TTL) + a 12 000-char state cap | repeats are free; an oversized command is answered locally because judging a head and a tail is not judging the command |
+
+Two invariants, both taken from published implementations rather than invented here:
+
+- **Jev may only narrow.** A confident `allow` returns *nothing*, so the harness's own
+  permission flow still applies. `allowMode: "passthrough"` is the default and
+  `"allow"` — which would genuinely grant a permission — is opt-in.
+- **A hard action needs a decisive answer.** Below the confidence bar (0.70) every answer
+  degrades to `ask`; a `noul destructive` of 0.50 or more forces `ask` even when the
+  choice said `allow`.
+
+Audit mode judges for real and writes one line, and never touches the turn:
+
+```json
+{"gate":"pre_tool","host":"claude","tool":"Bash","decision":"ask","source":"jev",
+ "belts":["recursive delete","delete without recycle"],"command_prefix":"rm -rf ./build …",
+ "reason":"worth a human glance (100% confidence, 95% destructive).","mode":"audit",
+ "answers":{"risk":{"choice":"ask","confidence":1.0},"destructive":{"noul":0.95}}}
+```
+
+Flip to enforcement in `hooks/gate-policy.json` (`"mode": "enforce"`), or per shell with
+`JEV_GATE_MODE=enforce`. Enforcement then answers natively:
+
+```text
+Claude Code / Codex   {"hookSpecificOutput":{"hookEventName":"PreToolUse",
+                       "permissionDecision":"ask","permissionDecisionReason":"jev: …"}}
+Antigravity           {"decision":"ask","reason":"jev: …"}
+```
+
+Codex has no `ask` on `PreToolUse`, so set `JEV_GATE_HOST=codex` there: `ask` becomes a
+`systemMessage` (pass through with the concern surfaced) and `deny` stays a denial.
+
+Every failure path is silent and exits 0 — no key, timeout, unreadable server, bad JSON,
+malformed answer — because a permission gate that blocks by accident costs more trust than
+one that misses a case. State lives in `$TMPDIR/jev-gate` (`JEV_GATE_STATE_DIR`):
+`decisions.jsonl` is the audit trail, `cache.json` the per-session memory.
 
 ### Antigravity
 
