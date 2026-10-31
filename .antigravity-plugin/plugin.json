@@ -1,0 +1,18 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "jev-cost-guard",
+  "displayName": "jev cost guard",
+  "version": "0.7.0",
+  "description": "Token-economy guard: jev decision-model MCP tools (jev_health, jev_summarize, jev_find, jev_screen) plus the jev-* skills, for Antigravity.",
+  "logo": "assets/icon.png",
+  "suggestedPrompts": [
+    "Screen these files with jev before loading them all",
+    "Summarize this command output with one jev verdict",
+    "Audit my fixed prompt budget and cut the fattest skill"
+  ],
+  "author": { "name": "ronail" },
+  "homepage": "https://github.com/ronail/jev-cost-guard",
+  "repository": "https://github.com/ronail/jev-cost-guard",
+  "license": "MIT",
+  "keywords": ["jev", "typesafe", "context", "tokens", "mcp", "skills"]
+}

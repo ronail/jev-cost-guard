@@ -28,11 +28,11 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ADAPTER_DOC = "harness-adapters.md"
 
-CLI_RE = re.compile(r"(?<![\w/.\-`])(hermes|codex|claude|gemini)\s+(?:-{1,2}[A-Za-z][\w-]*|[a-z][\w-]*)")
+CLI_RE = re.compile(r"(?<![\w/.\-`])(hermes|codex|claude|gemini|agy|antigravity)\s+(?:-{1,2}[A-Za-z][\w-]*|[a-z][\w-]*)")
 # A scope marker: the line or its enclosing fenced block says which runtime it is for.
 SCOPE_RE = re.compile(
-    r"(?i)(hermes only|codex only|claude only|per harness|your own harness|your harness"
-    r"|harness you are running|only when you are|current harness|\|\s*(hermes|codex|claude|claude code|other)\b)"
+    r"(?i)(hermes only|codex only|claude only|antigravity only|agy only|per harness|your own harness|your harness"
+    r"|harness you are running|only when you are|current harness|\|\s*(hermes|codex|claude|claude code|antigravity|agy|other)\b)"
 )
 SCRATCH_RE = re.compile(r"BH_AGENT_WORKSPACE")
 SCRATCH_OK_RE = re.compile(r"TMPDIR|/tmp|scratch")
