@@ -17,6 +17,7 @@ Usage
 -----
     python3 scripts/prompt_budget.py                    # auto-detect harness
     python3 scripts/prompt_budget.py --harness codex
+    python3 scripts/prompt_budget.py --harness antigravity
     python3 scripts/prompt_budget.py --root ~/.codex/skills --root ./skills
     python3 scripts/prompt_budget.py --json --budget 2500
 
@@ -43,6 +44,7 @@ SKIP_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache", ".venv", "v
 HERMES_ENV = ("HERMES_HOME", "HERMES_PROFILE", "HERMES_SESSION")
 CLAUDE_ENV = ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_PLUGIN_ROOT")
 CODEX_ENV = ("CODEX_HOME", "CODEX_SANDBOX", "CODEX_SESSION_ID", "OPENAI_CODEX")
+ANTIGRAVITY_ENV = ("ANTIGRAVITY_AGENT", "ANTIGRAVITY_APP_DATA_DIR", "JETSKI_APP_DATA_DIR")
 
 
 def detect_harness() -> str:
@@ -53,6 +55,8 @@ def detect_harness() -> str:
         return "codex"
     if any(env.get(k) for k in CLAUDE_ENV):
         return "claude"
+    if any(env.get(k) for k in ANTIGRAVITY_ENV):
+        return "antigravity"
     return "unknown"
 
 
@@ -71,6 +75,7 @@ def newest_profile_skills() -> str | None:
 
 SKIPPED: list[tuple[str, str]] = []  # (path, reason) roots left out of the estimate
 FILTER_STATE = "n/a"  # "applied" | "unavailable" (no tomllib/config) | "all-plugins" | "n/a"
+AG_FILTER_STATE = "n/a"  # same vocabulary, for Antigravity's plugin roster
 
 
 def codex_enabled_plugins() -> set[str] | None:
@@ -111,6 +116,51 @@ def codex_plugin_key(path: str) -> str | None:
         plugin = parts[0]
         return f"{plugin}@{plugin}"
     return None
+
+
+# Antigravity global skills roots: App + IDE (`~/.gemini/config/skills`), the IDE's
+# legacy path, and the CLI's own directory. A workspace roster adds `.agents/skills`
+# (`.agent/skills` is the back-compat spelling).
+ANTIGRAVITY_GLOBAL_SKILL_ROOTS = (
+    (".gemini", "config", "skills"),
+    (".gemini", "antigravity", "skills"),
+    (".gemini", "antigravity-cli", "skills"),
+)
+ANTIGRAVITY_WORKSPACE_ROOTS = ((".agents", "skills"), (".agent", "skills"))
+
+
+def antigravity_plugin_dirs() -> list[str]:
+    return sorted(p for p in glob.glob(home(".gemini", "config", "plugins", "*")) if os.path.isdir(p))
+
+
+def antigravity_disabled_plugins() -> set[str] | None:
+    """Plugin names Antigravity does not load.
+
+    Two independent signals, both local: an `enabled: false` entry in
+    `~/.gemini/config/config.json`, and the marker `agy plugin disable` leaves
+    behind (`plugin.json` renamed to `plugin.json.disabled`). Returns None when
+    no plugin directory is readable at all, so the caller reports an upper bound
+    instead of quietly filtering everything.
+    """
+    dirs = antigravity_plugin_dirs()
+    if not dirs:
+        return None
+    disabled: set[str] = set()
+    try:
+        with open(home(".gemini", "config", "config.json"), encoding="utf-8") as fh:
+            plugins = json.load(fh).get("plugins")
+    except (OSError, ValueError):
+        plugins = None
+    if isinstance(plugins, dict):
+        for name, spec in plugins.items():
+            if isinstance(spec, dict) and spec.get("enabled") is False:
+                disabled.add(name)
+    for path in dirs:
+        name = os.path.basename(path)
+        if (os.path.isfile(os.path.join(path, "plugin.json.disabled"))
+                and not os.path.isfile(os.path.join(path, "plugin.json"))):
+            disabled.add(name)
+    return disabled
 
 
 def default_roots(
@@ -160,6 +210,29 @@ def default_roots(
             FILTER_STATE = "applied"
         add_glob("codex:plugin", home(".codex", "plugins", "cache", "*", "*", "*", "skills"), enabled)
         add_glob("codex:plugin", home(".codex", "plugins", "*", "skills"), enabled)
+
+    if harness in ("antigravity", "unknown"):
+        for parts in ANTIGRAVITY_GLOBAL_SKILL_ROOTS:
+            add(f"antigravity:{parts[-2]}", home(*parts))
+        for parts in ANTIGRAVITY_WORKSPACE_ROOTS:
+            add("antigravity:workspace", os.path.join(os.getcwd(), *parts))
+        global AG_FILTER_STATE
+        disabled = antigravity_disabled_plugins()
+        if all_plugins:
+            AG_FILTER_STATE = "all-plugins"
+        elif disabled is None:
+            AG_FILTER_STATE = "unavailable"
+        else:
+            AG_FILTER_STATE = "applied"
+        for path in antigravity_plugin_dirs():
+            name = os.path.basename(path)
+            skills_dir = os.path.join(path, "skills")
+            if not os.path.isdir(skills_dir):
+                continue
+            if disabled is not None and not all_plugins and name in disabled:
+                SKIPPED.append((skills_dir, f"{name} is disabled"))
+                continue
+            add("antigravity:plugin", skills_dir)
 
     return roots
 
@@ -264,7 +337,7 @@ def collect(roots: list[tuple[str, str]]) -> tuple[list[dict], int]:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Estimate the skills-index cost of a harness.")
-    ap.add_argument("--harness", default="auto", choices=["auto", "hermes", "claude", "codex", "unknown", "all"])
+    ap.add_argument("--harness", default="auto", choices=["auto", "hermes", "claude", "codex", "antigravity", "unknown", "all"])
     ap.add_argument("--profile", default=None, help="Hermes profile name to measure (default: newest)")
     ap.add_argument("--root", action="append", default=[], help="skills root to scan (repeatable)")
     ap.add_argument("--budget", type=int, default=DEFAULT_BUDGET, help="index budget in bytes (default 2500)")
@@ -299,6 +372,7 @@ def main(argv: list[str] | None = None) -> int:
         "budget_bytes": args.budget,
         "status": "over" if over else "under",
         "plugin_filter": FILTER_STATE,
+        "plugin_filter_antigravity": AG_FILTER_STATE,
         "note": "lower bound: renderer adds separators and per-category lines",
     }
 
@@ -318,6 +392,9 @@ def main(argv: list[str] | None = None) -> int:
                   f"(use --all-plugins to count them)")
         elif FILTER_STATE == "unavailable":
             print("plugin caches NOT filtered (no tomllib or no ~/.codex/config.toml): "
+                  "treat the total as an upper bound, or pass --root")
+        if AG_FILTER_STATE == "unavailable":
+            print("antigravity plugin caches NOT filtered (no plugin dir under ~/.gemini/config): "
                   "treat the total as an upper bound, or pass --root")
         if not skills:
             print("no SKILL.md found under the scanned roots", file=sys.stderr)
