@@ -554,21 +554,54 @@ def test_the_shipped_policy_honours_session_approvals():
     assert policy_json["cache"]["scope"] == "session"   # the approval dies with the session
 
 
-def test_the_post_tool_hook_records_what_ran(tmp_path):
-    """The evidence comes from PostToolUse, so it must survive a small payload too."""
+def _transcript(tmp_path: Path, decision: dict) -> Path:
+    """A transcript tail holding one permission decision, as Claude Code writes it."""
+    path = tmp_path / "transcript.jsonl"
+    path.write_text(json.dumps({"type": "user", "message": {"content": []},
+                                "permissionDecision": decision}) + "\n")
+    return path
+
+
+def _run_post_tool(tmp_path: Path, event: dict) -> dict:
+    """Run the PostToolUse hook and return the ledger it wrote."""
     state = tmp_path / "s"
     post = ROOT / "hooks" / "claude-codex-jev-verdict.py"
-    env = dict(os.environ)
-    env["JEV_GATE_STATE_DIR"] = str(state)
-    event = {"hook_event_name": "PostToolUse", "session_id": "s1", "cwd": "/w/app",
+    env = dict(os.environ, JEV_GATE_STATE_DIR=str(state))
+    subprocess.run([sys.executable, str(post)], input=json.dumps(event),
+                   capture_output=True, text=True, env=env, timeout=60)
+    path = state / "executed.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+POST_TOOL = {"hook_event_name": "PostToolUse", "session_id": "s1", "cwd": "/w/app",
              "tool_name": "Bash", "tool_input": {"command": "rm -rf ./build"},
-             "tool_result": {"output": "ok"}}          # below the judging threshold
-    result = subprocess.run([sys.executable, str(post)], input=json.dumps(event),
-                            capture_output=True, text=True, env=env, timeout=60)
-    assert result.returncode == 0
-    assert result.stdout == ""                        # bookkeeping never talks to the model
-    written = json.loads((state / "executed.json").read_text())
+             "tool_result": {"output": "ok"}}     # below the judging threshold
+
+
+def test_a_session_grant_becomes_a_record(tmp_path):
+    """'Don't ask again this session' is a rule; the retry should honour it."""
+    event = dict(POST_TOOL, transcript_path=str(
+        _transcript(tmp_path, {"decision": "accept", "source": "user_temporary"})))
+    written = _run_post_tool(tmp_path, event)
     assert gates.cache_key("claude", "Bash", "rm -rf ./build", "/w/app", "s1") in written
+
+
+def test_a_one_shot_grant_does_not_become_a_record(tmp_path):
+    """grantScope: once means once — a repeat must be asked again."""
+    event = dict(POST_TOOL, transcript_path=str(_transcript(tmp_path, {
+        "decision": "accept", "source": "user_temporary", "grantScope": "once"})))
+    assert _run_post_tool(tmp_path, event) == {}
+
+
+def test_an_automatic_approval_is_not_a_human_grant(tmp_path):
+    """source: config means a classifier or a rule said yes, not a person."""
+    event = dict(POST_TOOL, transcript_path=str(_transcript(tmp_path, {
+        "decision": "accept", "source": "config", "reasonType": "classifier"})))
+    assert _run_post_tool(tmp_path, event) == {}
+
+
+def test_no_transcript_means_no_grant(tmp_path):
+    assert _run_post_tool(tmp_path, POST_TOOL) == {}
 
 
 def test_a_bypass_mode_run_is_not_an_approval(tmp_path):

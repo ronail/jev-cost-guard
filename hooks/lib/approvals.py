@@ -60,6 +60,56 @@ def record_run(key: str, permission_mode: str = "default") -> None:
         pass  # a permission gate must never fail because bookkeeping failed
 
 
+def last_permission(path: str) -> dict:
+    """The harness's own record of the last permission decision in this session.
+
+    Claude Code writes one `permissionDecision` object per tool call into the user row of
+    the transcript, and it carries the *scope* of the grant — the thing no hook payload
+    exposes. Measured on 5 000+ rows of real transcripts:
+
+      {"decision":"accept","source":"user_temporary","grantScope":"once"}  -> this once
+      {"decision":"accept","source":"user_temporary"}                     -> this session
+      {"decision":"accept","source":"user_permanent","ruleSource":"..."}  -> always
+      {"decision":"accept","source":"config","reasonType":"classifier"}   -> nobody asked
+
+    Read backwards from the end; unreadable or absent means {} — the caller then treats it
+    as "no grant", which is the behaviour that keeps asking.
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            lines = handle.readlines()
+    except Exception:
+        return {}
+    for line in reversed(lines[-400:]):
+        if "permissionDecision" not in line:
+            continue
+        try:
+            row = json.loads(line)
+        except Exception:
+            continue
+        decision = row.get("permissionDecision") if isinstance(row, dict) else None
+        if isinstance(decision, dict):
+            return decision
+    return {}
+
+
+def grant_scope(decision: dict) -> str | None:
+    """Which grant the human gave, according to the harness.
+
+    Only `session` and `always` are worth remembering: `once` is exactly what it says, and
+    `config`/`hook` mean no person was involved, so nothing was granted in anyone's name.
+    Anything unrecognised returns None and the gate keeps asking.
+    """
+    if not isinstance(decision, dict) or decision.get("decision") != "accept":
+        return None
+    source = str(decision.get("source") or "")
+    if source == "user_permanent":
+        return "always"
+    if source != "user_temporary":
+        return None
+    return "once" if decision.get("grantScope") == "once" else "session"
+
+
 def was_executed(key: str) -> bool:
     stamp = _load().get(key)
     if not isinstance(stamp, (int, float)):

@@ -107,6 +107,9 @@ def _record_execution(event: dict, tool: str) -> None:
         session = str(event.get("session_id") or event.get("conversationId") or "")
         cwd = str(event.get("cwd") or args.get("cwd") or "")
         mode = str(event.get("permission_mode") or "default")
+        grant = approvals.grant_scope(approvals.last_permission(str(event.get("transcript_path") or "")))
+        if grant not in ("session", "always"):
+            return                     # a one-shot yes, or nobody was asked: not a rule
         for key in (gates.cache_key(host, tool, command, cwd, session),
                     gates.cache_key(host, tool, command, cwd, "")):
             approvals.record_run(key, mode)
