@@ -464,3 +464,83 @@ def test_a_legacy_allow_entry_is_ignored(stub, tmp_path):
     assert len(log.read_text().splitlines()) == 1          # judged again
     record = json.loads((state / "decisions.jsonl").read_text().splitlines()[-1])
     assert record["source"] == "jev"
+
+
+# ── the human's answer is honoured, the human's silence is not ──────────────
+
+DENYING = {
+    "ok": True,
+    "model": "jev-1.13.0",
+    "answers": {"risk": {"choice": "deny", "confidence": 0.91, "probabilities": {"deny": 0.91}},
+                "destructive": {"noul": 0.88}},
+}
+
+
+def _record_execution(state: Path, session: str = "s1", cwd: str = "") -> None:
+    """Stand in for the PostToolUse hook: this command ran after the ask."""
+    key = gates.cache_key("claude", "Bash", "rm -rf ./build", cwd, session)
+    path = state / "executed.json"
+    data = json.loads(path.read_text()) if path.exists() else {}
+    data[key] = 9e9
+    path.write_text(json.dumps(data))
+
+
+def test_an_approved_command_is_not_asked_again(stub, tmp_path):
+    """Asked once, approved once, ran once: the retry should not nag."""
+    server, _log = stub(RESTRICTIVE)
+    state = tmp_path / "s"
+    first = run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce")
+    assert json.loads(first.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
+    _record_execution(state)                       # the human said yes and it ran
+    second = run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce")
+    assert second.stdout == ""                     # pass through to the harness's own rule
+    record = json.loads((state / "decisions.jsonl").read_text().splitlines()[-1])
+    assert record["source"] == "approved"
+
+
+def test_an_unanswered_command_keeps_asking(stub, tmp_path):
+    """No execution record means no approval: the question stands."""
+    server, _log = stub(RESTRICTIVE)
+    state = tmp_path / "s"
+    for _ in range(3):
+        run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce")
+    record = json.loads((state / "decisions.jsonl").read_text().splitlines()[-1])
+    assert record["source"] == "cache"
+    assert record["decision"] == "ask"
+
+
+def test_an_execution_does_not_launder_a_deny(stub, tmp_path):
+    """A deny is not an approval, whatever ran later."""
+    server, _log = stub(DENYING)
+    state = tmp_path / "s"
+    run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce")
+    _record_execution(state)
+    second = run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce")
+    payload = json.loads(second.stdout)
+    assert payload["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_a_different_session_approval_does_not_carry_over(stub, tmp_path):
+    server, _log = stub(RESTRICTIVE)
+    state = tmp_path / "s"
+    run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce")
+    _record_execution(state, session="someone-else")
+    second = run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce")
+    assert json.loads(second.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_the_post_tool_hook_records_what_ran(tmp_path):
+    """The evidence comes from PostToolUse, so it must survive a small payload too."""
+    state = tmp_path / "s"
+    post = ROOT / "hooks" / "claude-codex-jev-verdict.py"
+    env = dict(os.environ)
+    env["JEV_GATE_STATE_DIR"] = str(state)
+    event = {"hook_event_name": "PostToolUse", "session_id": "s1", "cwd": "/w/app",
+             "tool_name": "Bash", "tool_input": {"command": "rm -rf ./build"},
+             "tool_result": {"output": "ok"}}          # below the judging threshold
+    result = subprocess.run([sys.executable, str(post)], input=json.dumps(event),
+                            capture_output=True, text=True, env=env, timeout=60)
+    assert result.returncode == 0
+    assert result.stdout == ""                        # bookkeeping never talks to the model
+    written = json.loads((state / "executed.json").read_text())
+    assert gates.cache_key("claude", "Bash", "rm -rf ./build", "/w/app", "s1") in written
