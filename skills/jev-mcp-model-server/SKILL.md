@@ -71,13 +71,13 @@ auto-detects framing: `Content-Length` headers (strict MCP clients) **and**
 newline-delimited JSON (line-oriented clients). No per-harness fork. The command is
 always `python3 <repo>/mcp/jev/server.py`; only the registry differs:
 
-| harness | register with | env |
+| harness | register with | credentials |
 |---|---|---|
 | Hermes | `hermes -p <profile> mcp add jev --command python3 --args <repo>/mcp/jev/server.py`, or `mcp_servers` in the profile `config.yaml` | profile `.env`, or `--env JEV_MODEL=…` |
-| Claude Code | `mcpServers.jev` in the Claude Code config (plus `hooks.PostToolUse` for the gate) | that config's `env`, or the OS env |
+| Claude Code | `mcpServers.jev` in the Claude Code config (plus `hooks.PostToolUse` for the gate) | that config's `env`, or the OS environment |
 | Codex | `codex mcp add jev -- python3 <repo>/mcp/jev/server.py`, or `[mcp_servers.jev]` in `config.toml` | `env_vars` / `[mcp_servers.jev.env]` |
-| Antigravity | `agy plugin install .` (bundles `mcp_config.json`), or `.agents/mcp_config.json` for one workspace | that file's `env`, `$PLUGIN_DATA/api_key`, or the OS env |
-| anything else | its MCP registry / config file | its own env |
+| Antigravity | `agy plugin install .` (bundles `mcp_config.json`), or `.agents/mcp_config.json` for one workspace | that file's `env`, `$PLUGIN_DATA/api_key`, or the OS environment |
+| anything else | its MCP registry / config file | its own environment |
 
 Rules that keep this portable: register in **your** harness only; never run another
 runtime's CLI or edit another runtime's config from here; and put the key in the
