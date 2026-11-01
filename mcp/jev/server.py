@@ -516,14 +516,26 @@ def _analytics_append(row: dict) -> None:
 
 
 def _analytics_trim(path: str) -> None:
-    """Keep the ledger bounded when nobody ever calls `report` to clear it."""
+    """Keep the ledger bounded when nobody ever calls `report` to clear it.
+
+    Truncate-then-write would lose every row if the process died mid-write, and
+    two harnesses sharing a ledger (a normal setup — the path is per-profile, not
+    per-process) can interleave through an ``open(path, "w")``. Write the tail to
+    a sibling temp file and ``os.replace`` it, so a reader sees the old ledger or
+    the new one, never a half-written one.
+    """
+    tmp = f"{path}.{os.getpid()}.tmp"
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             lines = fh.readlines()[-_LEDGER_KEEP_LINES:]
-        with open(path, "w", encoding="utf-8") as fh:
+        with open(tmp, "w", encoding="utf-8") as fh:
             fh.writelines(lines)
+        os.replace(tmp, path)
     except OSError:
-        pass
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def _jev_ask(state: str, question: str, qtype: str = "noul",
