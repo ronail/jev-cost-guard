@@ -681,21 +681,29 @@ malformed answer — because a permission gate that blocks by accident costs mor
 one that misses a case. State lives in `$TMPDIR/jev-gate` (`JEV_GATE_STATE_DIR`):
 `decisions.jsonl` is the audit trail, `cache.json` the per-session memory.
 
-**An approval lasts for the session it was given in.** The gate cannot see the answer to
-its own `ask` — only a PostToolUse hook can see that the tool *ran*. When it did,
-`hooks/lib/approvals.py` records `(session, cwd, command)` and the retry passes through
-instead of asking again: the harness applies the approval it holds, or asks itself. The key
-is the session, so the approval dies with the session, with a directory change, or with any
-change to the command string.
+**An approval is honoured for exactly the scope the human granted.** The hook payload does
+not carry the answer to its own `ask`, but the transcript does: Claude Code records one
+`permissionDecision` object per tool call, and it names the grant — measured across 5 000+
+rows of real transcripts on this machine:
 
-The negative cases are what keep it honest. No recorded run means no approval, so the
-question stands; a `deny` stays a deny even if something ran later; in `bypassPermissions`
-(`--dangerously-skip-permissions`) nothing is recorded, because nobody was asked and nothing
-was granted. Antigravity has no PostToolUse group wired, so it keeps asking there —
-degrading to the old behaviour, never to a widened permission.
+| recorded in the transcript | meaning | reused? |
+|---|---|---|
+| `{"source":"user_temporary","grantScope":"once"}` | yes, this once | **no** — the repeat asks again |
+| `{"source":"user_temporary"}` | yes, and don't ask again this session | **yes** — scoped to `session` + `cwd` + command |
+| `{"source":"user_permanent","ruleSource":"localSettings"}` | always allow (persisted) | **yes** |
+| `{"source":"config","reasonType":"classifier"}` | a rule or classifier said yes; nobody was asked | **no** — no human, no grant |
+| `{"decision":"reject", …}` | no | never — a refusal cannot be laundered |
 
-Set `cache.honorApprovals: false` for the strict variant: every repeat is re-judged, even
-after a yes.
+So `hooks/lib/approvals.py` reads the transcript tail after the tool runs, and records a
+grant only for `user_temporary` (without `grantScope: once`) or `user_permanent`, keyed by
+`(session, cwd, command)`. Anything unrecognised — an unreadable transcript, a new source
+name, a hook-issued approval — records nothing and the gate keeps asking, which is the
+failure mode that costs a prompt instead of a permission.
+
+`grantScope` is an internal field, not documented API: if a future release renames it the
+gate degrades to always-asking rather than to always-allowing. In `bypassPermissions`
+nothing is recorded at all. Antigravity has no PostToolUse group wired, so it keeps asking
+there. `cache.honorApprovals: false` disables all of this.
 
 ### Antigravity
 
