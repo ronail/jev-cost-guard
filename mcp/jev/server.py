@@ -458,6 +458,48 @@ def _analytics_ledger() -> str:
     return os.path.join(_analytics_dir(), "calls.jsonl")
 
 
+def _state_home() -> str:
+    state = (os.environ.get("XDG_STATE_HOME") or "").strip()
+    if state:
+        return os.path.expanduser(state)
+    return os.path.join(os.path.expanduser("~"), ".local", "state")
+
+
+def _ledger_pointer() -> str:
+    """Where the resolved ledger path is published for other processes."""
+    return os.path.join(_state_home(), "jev-cost-guard", "ledger-path")
+
+
+_PUBLISHED: dict[str, bool] = {}
+
+
+def _analytics_publish(path: str) -> None:
+    """Tell the report script where this process is writing.
+
+    The server and the script run in *different* processes with different
+    environments: only the server gets `JEV_CALL_LOG` / `PLUGIN_DATA` from the
+    host's MCP config, so the script's copy of the same resolution logic lands on
+    a different file and every report comes back empty. A pointer written to a
+    fixed, env-independent location closes the gap.
+    """
+    if _PUBLISHED.get(path):
+        return
+    pointer = _ledger_pointer()
+    tmp = f"{pointer}.{os.getpid()}.tmp"
+    try:
+        os.makedirs(os.path.dirname(pointer) or ".", exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(path + "\n")
+        os.replace(tmp, pointer)
+        _PUBLISHED[path] = True
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+
 def _usage_add(usage) -> None:
     """Accumulate jev's own `usage` block; it used to die inside the transport."""
     if not isinstance(usage, dict):
@@ -507,6 +549,7 @@ def _analytics_append(row: dict) -> None:
     path = _analytics_ledger()
     try:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        _analytics_publish(path)
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, separators=(",", ":")) + "\n")
         if os.path.getsize(path) > _LEDGER_MAX_BYTES:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import pathlib
 import time
 from pathlib import Path
 
@@ -268,6 +269,47 @@ def test_failed_replace_keeps_the_old_ledger(script, srv, monkeypatch):
     srv._analytics_trim(script.ledger_path())
     assert script.read_rows() == before  # nothing truncated
     assert not list(Path(script.ledger_path()).parent.glob("*.tmp"))
+
+
+def test_script_follows_the_server_across_processes(script, srv, monkeypatch, tmp_path):
+    """The real deployment: the server sees JEV_CALL_LOG/PLUGIN_DATA from the
+    host's MCP config, the report script run from the agent's shell sees neither.
+    Without the published pointer they resolve different files and every report
+    is silently empty — which is exactly what a live turn caught."""
+    monkeypatch.delenv("JEV_ANALYTICS_DIR", raising=False)
+    monkeypatch.delenv("JEV_CALL_LOG", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "st"))
+    monkeypatch.setattr(srv, "_PUBLISHED", {})
+    monkeypatch.setenv("PLUGIN_DATA", str(tmp_path / "pd"))  # server-only env
+    srv._USAGE.update({"in": 10, "out": 2, "model": "jev-1.13-free"})
+    srv._analytics_record("screen", 4000, "v")
+    server_path = srv._analytics_ledger()
+
+    monkeypatch.delenv("PLUGIN_DATA", raising=False)  # the agent's shell
+    assert script.ledger_path() == server_path
+    rows = script.read_rows()
+    assert len(rows) == 1 and rows[0]["jev_in"] == 10
+
+
+def test_explicit_ledger_beats_the_pointer(script, srv, monkeypatch, tmp_path):
+    monkeypatch.delenv("JEV_ANALYTICS_DIR", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "st"))
+    monkeypatch.setattr(srv, "_PUBLISHED", {})
+    srv._USAGE.update({"in": 1, "out": 1, "model": "jev-1.13-free"})
+    srv._analytics_record("screen", 10, "v")
+    monkeypatch.setenv("JEV_CALL_LOG", str(tmp_path / "mine.jsonl"))
+    assert script.ledger_path() == str(tmp_path / "mine.jsonl")
+
+
+def test_pointer_is_published_atomically(script, srv, monkeypatch, tmp_path):
+    monkeypatch.delenv("JEV_ANALYTICS_DIR", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "st"))
+    monkeypatch.setattr(srv, "_PUBLISHED", {})
+    srv._USAGE.update({"in": 1, "out": 1, "model": "jev-1.13-free"})
+    srv._analytics_record("screen", 10, "v")
+    pointer = pathlib.Path(srv._ledger_pointer())
+    assert pointer.read_text().strip() == srv._analytics_ledger()
+    assert not list(pointer.parent.glob("*.tmp"))
 
 
 # ── pricing ───────────────────────────────────────────────────────────────────
