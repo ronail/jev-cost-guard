@@ -37,7 +37,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
-from lib import gates  # noqa: E402  (hooks/ is on sys.path above)
+from lib import approvals, gates  # noqa: E402  (hooks/ is on sys.path above)
 
 SERVER = os.environ.get("JEV_SERVER_PATH") or os.path.join(
     REPO_ROOT, "mcp", "jev", "server.py"
@@ -244,6 +244,11 @@ def main() -> None:
     # is the one failure this gate exists to prevent.
     if isinstance(cached, dict) and cached.get("d") in ("ask", "deny"):
         decision, reason, source = cached["d"], str(cached.get("r", "")), "cache"
+        if decision == "ask" and approvals.was_executed(key):
+            # The human already let this exact command run here, so asking again is
+            # nagging. Say nothing and let the harness apply the approval it recorded
+            # (or ask again itself) — silence defers, it never widens.
+            decision, reason, source = None, "already approved and run in this session", "approved"
     else:
         oversized = gates.oversized_decision(command, policy)
         if oversized is not None:
