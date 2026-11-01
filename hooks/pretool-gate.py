@@ -126,12 +126,15 @@ def read_cache(policy: dict) -> dict:
 
 
 def write_cache(cache: dict, policy: dict) -> None:
-    ttl = float((policy.get("cache") or {}).get("ttlMs", 3_600_000)) / 1000.0
+    cache_policy = policy.get("cache") or {}
+    prune_after = float(cache_policy.get("pruneAfterMs", cache_policy.get("ttlMs", 86_400_000))) / 1000.0
+    max_entries = int(cache_policy.get("maxEntries", 2_000))
     now = time.time()
     fresh = {k: v for k, v in cache.items()
-             if isinstance(v, dict) and now - float(v.get("ts", 0)) < ttl}
-    if len(fresh) > 500:  # keep the newest, bounded
-        fresh = dict(sorted(fresh.items(), key=lambda kv: float(kv[1].get("ts", 0)), reverse=True)[:500])
+             if isinstance(v, dict) and now - float(v.get("ts", 0)) < prune_after}
+    if len(fresh) > max_entries:  # keep the newest, bounded
+        fresh = dict(sorted(fresh.items(), key=lambda kv: float(kv[1].get("ts", 0)), reverse=True)[:max_entries])
+
     try:
         with open(os.path.join(_state_dir(), "cache.json"), "w", encoding="utf-8") as handle:
             json.dump(fresh, handle)
@@ -227,7 +230,8 @@ def main() -> None:
     if not reasons:
         sys.exit(0)  # tier 0 says this is routine: no request, no log line
     policy = load_policy()
-    key = gates.cache_key(host, tool, command)
+    scope = (policy.get("cache") or {}).get("scope", "session")
+    key = gates.cache_key(host, tool, command, cwd, session if scope == "session" else "")
     cache = read_cache(policy)
     cached = cache.get(key)
     source = "jev"

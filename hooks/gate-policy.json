@@ -8,7 +8,9 @@
   },
   "maxStateChars": 12000,
   "cache": {
-    "ttlMs": 3600000
+    "scope": "session",
+    "pruneAfterMs": 86400000,
+    "maxEntries": 2000
   },
   "allowMode": "passthrough",
   "stop": {

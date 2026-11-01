@@ -380,3 +380,46 @@ def test_the_accidents_a_measured_corpus_found_are_caught(command, label):
 ])
 def test_ordinary_work_still_costs_nothing(command):
     assert gates.command_reasons(command) == []
+
+
+# ── the cache is per decision, not per command string ───────────────────────
+
+def test_a_verdict_does_not_travel_to_a_new_session(stub, tmp_path):
+    """A fresh session inherits nothing: same command, different session id."""
+    server, log = stub(RESTRICTIVE)
+    state = tmp_path / "s"
+    run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce")
+    second = dict(CLAUDE_EVENT, session_id="s2")
+    run_hook(second, server=server, state_dir=state, mode="enforce")
+    assert len(log.read_text().splitlines()) == 2
+    assert json.loads((state / "decisions.jsonl").read_text().splitlines()[-1])["source"] == "jev"
+
+
+def test_a_verdict_does_not_travel_to_a_new_directory(stub, tmp_path):
+    """`rm -rf ./build` in another repo is another decision."""
+    server, log = stub(RESTRICTIVE)
+    state = tmp_path / "s"
+    run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce")
+    moved = dict(CLAUDE_EVENT, cwd="/elsewhere/app")
+    run_hook(moved, server=server, state_dir=state, mode="enforce")
+    assert len(log.read_text().splitlines()) == 2
+
+
+def test_a_global_scope_keeps_the_old_shared_key(stub, tmp_path):
+    """Operators who want one verdict per command can ask for it, explicitly."""
+    server, log = stub(RESTRICTIVE)
+    state = tmp_path / "s"
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(json.dumps({"cache": {"scope": "global"}}))
+    for session in ("s1", "s2"):
+        run_hook(dict(CLAUDE_EVENT, session_id=session), server=server, state_dir=state,
+                 mode="enforce", extra_env={"JEV_GATE_POLICY": str(policy_file)})
+    assert len(log.read_text().splitlines()) == 1
+
+
+def test_shipped_policy_prunes_by_time_not_by_decision():
+    policy_json = json.loads((ROOT / "hooks" / "gate-policy.json").read_text())
+    cache = policy_json["cache"]
+    assert cache["scope"] == "session"
+    assert "ttlMs" not in cache            # a timeout is a pruning rule, not correctness
+    assert cache["pruneAfterMs"] >= 3_600_000
