@@ -681,18 +681,21 @@ malformed answer — because a permission gate that blocks by accident costs mor
 one that misses a case. State lives in `$TMPDIR/jev-gate` (`JEV_GATE_STATE_DIR`):
 `decisions.jsonl` is the audit trail, `cache.json` the per-session memory.
 
-**Approvals are not remembered by default, because their scope is not visible.** The gate
-cannot see the answer to its own `ask`, and neither hook can see *which* answer: "yes, this
-once" and "yes, and don't ask again this session" arrive as the same execution. So
-`hooks/lib/approvals.py` records that `(session, cwd, command)` ran, and the shipped policy
-still **asks again** — a one-shot yes must not become a session rule.
+**An approval lasts for the session it was given in.** The gate cannot see the answer to
+its own `ask` — only a PostToolUse hook can see that the tool *ran*. When it did,
+`hooks/lib/approvals.py` records `(session, cwd, command)` and the retry passes through
+instead of asking again: the harness applies the approval it holds, or asks itself. The key
+is the session, so the approval dies with the session, with a directory change, or with any
+change to the command string.
 
-Operators who know their host grants session-wide approvals can set
-`cache.honorApprovals: true`; the retry then passes through instead of asking, deferring to
-the harness's own rule. In `bypassPermissions` (`--dangerously-skip-permissions`) nothing is
-recorded at all: nobody was asked, so nothing was granted. Antigravity has no PostToolUse
-group wired, so it keeps asking there — degrading to the old behaviour, never to a widened
-permission.
+The negative cases are what keep it honest. No recorded run means no approval, so the
+question stands; a `deny` stays a deny even if something ran later; in `bypassPermissions`
+(`--dangerously-skip-permissions`) nothing is recorded, because nobody was asked and nothing
+was granted. Antigravity has no PostToolUse group wired, so it keeps asking there —
+degrading to the old behaviour, never to a widened permission.
+
+Set `cache.honorApprovals: false` for the strict variant: every repeat is re-judged, even
+after a yes.
 
 ### Antigravity
 

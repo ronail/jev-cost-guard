@@ -11,7 +11,7 @@
     "scope": "session",
     "pruneAfterMs": 86400000,
     "maxEntries": 2000,
-    "honorApprovals": false
+    "honorApprovals": true
   },
   "allowMode": "passthrough",
   "stop": {

@@ -476,10 +476,10 @@ DENYING = {
 }
 
 
-def _honoring(tmp_path: Path) -> dict:
-    """Opt in to approval memory — off by default, because a one-shot yes is not a rule."""
+def _strict(tmp_path: Path) -> dict:
+    """Turn approval memory off — for anyone who wants every repeat re-asked."""
     path = tmp_path / "policy.json"
-    path.write_text(json.dumps({"cache": {"honorApprovals": True}}))
+    path.write_text(json.dumps({"cache": {"honorApprovals": False}}))
     return {"JEV_GATE_POLICY": str(path)}
 
 
@@ -492,25 +492,22 @@ def _record_execution(state: Path, session: str = "s1", cwd: str = "") -> None:
     path.write_text(json.dumps(data))
 
 
-def test_a_recorded_run_does_not_silence_the_gate_by_default(stub, tmp_path):
-    """A one-shot yes is not a session rule, and the payload never says which one it was.
-
-    So the shipped policy keeps asking: nothing about "this ran" proves the human granted
-    it for the session, and guessing wrong is the failure this gate exists to prevent.
-    """
+def test_a_strict_policy_keeps_asking_after_a_run(stub, tmp_path):
+    """honorApprovals: false — every repeat is re-judged, for people who want that."""
     server, _log = stub(RESTRICTIVE)
     state = tmp_path / "s"
-    run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce")
-    _record_execution(state)                       # it ran — but we cannot see the scope
-    second = run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce")
+    strict = _strict(tmp_path)
+    run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce", extra_env=strict)
+    _record_execution(state)
+    second = run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce", extra_env=strict)
     assert json.loads(second.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
-def test_an_opted_in_session_approval_is_not_asked_again(stub, tmp_path):
-    """With honorApprovals on, the operator asserts the host's approvals are session-wide."""
+def test_a_session_approval_is_not_asked_again(stub, tmp_path):
+    """Shipped behaviour: the human approved in this session, so the retry does not nag."""
     server, _log = stub(RESTRICTIVE)
     state = tmp_path / "s"
-    honor = _honoring(tmp_path)
+    honor: dict = {}
     first = run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce", extra_env=honor)
     assert json.loads(first.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
     _record_execution(state)                       # the human said yes and it ran
@@ -545,16 +542,16 @@ def test_an_execution_does_not_launder_a_deny(stub, tmp_path):
 def test_a_different_session_approval_does_not_carry_over(stub, tmp_path):
     server, _log = stub(RESTRICTIVE)
     state = tmp_path / "s"
-    honor = _honoring(tmp_path)
-    run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce", extra_env=honor)
+    run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce")
     _record_execution(state, session="someone-else")
-    second = run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce", extra_env=honor)
+    second = run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce")
     assert json.loads(second.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
-def test_the_shipped_policy_does_not_honour_approvals():
+def test_the_shipped_policy_honours_session_approvals():
     policy_json = json.loads((ROOT / "hooks" / "gate-policy.json").read_text())
-    assert policy_json["cache"]["honorApprovals"] is False
+    assert policy_json["cache"]["honorApprovals"] is True
+    assert policy_json["cache"]["scope"] == "session"   # the approval dies with the session
 
 
 def test_the_post_tool_hook_records_what_ran(tmp_path):
