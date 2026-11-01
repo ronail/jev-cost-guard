@@ -248,6 +248,25 @@ def main() -> int:
         low, high = main["evidence_tokens"][0], main["evidence_tokens"][-1]
         print(f"the alternative (run facts into the prompt, model judges itself): "
               f"+{low}-{high} tokens of evidence, plus a whole turn over the context above")
+
+    if main["read_median"]:
+        mid = main["evidence_tokens"][len(main["evidence_tokens"]) // 2]
+        pre_state = pre["state_chars"][len(pre["state_chars"]) // 2] // 4
+        baseline = main["read_median"] + mid
+        rows = [
+            ("baseline: the model judges itself", main["read_median"] + mid, 0),
+            ("stop gate, audit (default)", 0, mid + 30),
+            ("stop gate, enforce", main["enforce_reason_tokens"], mid + 30),
+            ("pre-tool gate, audit", 0, pre_state + 30),
+            ("pre-tool gate, enforce", 60, pre_state + 30),
+        ]
+        print()
+        print("ONE DECISION, IN TOKENS")
+        print(f"{'path':<36} {'main':>10} {'jev':>6} {'total':>7} {'of baseline':>12}")
+        for label, main_tokens, jev_tokens in rows:
+            total = main_tokens + jev_tokens
+            print(f"{label:<36} {main_tokens:>10,} {jev_tokens:>6} {total:>7,} "
+                  f"{total / baseline * 100:>11.2f}%")
     return 0
 
 
