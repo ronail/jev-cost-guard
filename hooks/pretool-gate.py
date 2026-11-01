@@ -244,7 +244,8 @@ def main() -> None:
     # is the one failure this gate exists to prevent.
     if isinstance(cached, dict) and cached.get("d") in ("ask", "deny"):
         decision, reason, source = cached["d"], str(cached.get("r", "")), "cache"
-        if decision == "ask" and approvals.was_executed(key):
+        honor = bool((policy.get("cache") or {}).get("honorApprovals", False))
+        if decision == "ask" and honor and approvals.was_executed(key):
             # The human already let this exact command run here, so asking again is
             # nagging. Say nothing and let the harness apply the approval it recorded
             # (or ask again itself) — silence defers, it never widens.

@@ -681,16 +681,18 @@ malformed answer — because a permission gate that blocks by accident costs mor
 one that misses a case. State lives in `$TMPDIR/jev-gate` (`JEV_GATE_STATE_DIR`):
 `decisions.jsonl` is the audit trail, `cache.json` the per-session memory.
 
-**A human's yes is used once it has been used.** The gate cannot see the answer to its own
-`ask` — only a PostToolUse hook can see that the tool *ran*. When it did,
-`hooks/lib/approvals.py` records that `(session, cwd, command)` and the retry passes
-through instead of asking again: the harness either applies the approval it holds or asks
-itself, so the retry is not nagged twice. When it did not run, the question stands — a
-denial must never be laundered into silence by a later execution. In `bypassPermissions`
-(`--dangerously-skip-permissions`) nothing is recorded at all: nobody was asked, so
-nothing was granted, and the gate does not pretend otherwise. Antigravity has no
-PostToolUse group wired yet, so it keeps asking there; the behaviour degrades to the
-previous one, never to a widened permission.
+**Approvals are not remembered by default, because their scope is not visible.** The gate
+cannot see the answer to its own `ask`, and neither hook can see *which* answer: "yes, this
+once" and "yes, and don't ask again this session" arrive as the same execution. So
+`hooks/lib/approvals.py` records that `(session, cwd, command)` ran, and the shipped policy
+still **asks again** — a one-shot yes must not become a session rule.
+
+Operators who know their host grants session-wide approvals can set
+`cache.honorApprovals: true`; the retry then passes through instead of asking, deferring to
+the harness's own rule. In `bypassPermissions` (`--dangerously-skip-permissions`) nothing is
+recorded at all: nobody was asked, so nothing was granted. Antigravity has no PostToolUse
+group wired, so it keeps asking there — degrading to the old behaviour, never to a widened
+permission.
 
 ### Antigravity
 
