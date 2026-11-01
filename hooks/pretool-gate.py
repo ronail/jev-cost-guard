@@ -236,7 +236,13 @@ def main() -> None:
     cached = cache.get(key)
     source = "jev"
     answers: dict | None = None
-    if isinstance(cached, dict) and isinstance(cached.get("d"), str):
+    # Only restrictive verdicts may be reused. An `allow` is a statement about the world
+    # as much as about the string: the first `rm -rf ./build` may hit an empty directory
+    # and the next may hit a finished one, and `git push --force` means something else
+    # after a branch switch — same command, same session, same cwd, different blast
+    # radius. Over-asking is cheap and the human decides; silently skipping the question
+    # is the one failure this gate exists to prevent.
+    if isinstance(cached, dict) and cached.get("d") in ("ask", "deny"):
         decision, reason, source = cached["d"], str(cached.get("r", "")), "cache"
     else:
         oversized = gates.oversized_decision(command, policy)
@@ -247,8 +253,9 @@ def main() -> None:
             if answers is None:
                 sys.exit(0)  # fail open: no answer means the harness decides
             decision, reason = gates.decide_command(answers, policy)
-            cache[key] = {"d": decision, "r": reason, "ts": time.time()}
-            write_cache(cache, policy)
+            if decision in ("ask", "deny"):
+                cache[key] = {"d": decision, "r": reason, "ts": time.time()}
+                write_cache(cache, policy)
     audit({
         "gate": "pre_tool",
         "ts": round(time.time(), 3),

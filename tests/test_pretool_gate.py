@@ -423,3 +423,44 @@ def test_shipped_policy_prunes_by_time_not_by_decision():
     assert cache["scope"] == "session"
     assert "ttlMs" not in cache            # a timeout is a pruning rule, not correctness
     assert cache["pruneAfterMs"] >= 3_600_000
+
+
+# ── staleness: the world changes under a command string ─────────────────────
+
+def test_a_permissive_verdict_is_never_reused(stub, tmp_path):
+    """`rm -rf ./build` on an empty dir and on a finished one are different commands.
+
+    A cached `allow` would skip the question exactly when the answer matters, so an
+    allow is judged every time; only ask/deny are worth remembering.
+    """
+    server, log = stub(PERMISSIVE)
+    state = tmp_path / "s"
+    for _ in range(2):
+        run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce")
+    assert len(log.read_text().splitlines()) == 2
+    cache_file = state / "cache.json"
+    assert not cache_file.exists() or "allow" not in cache_file.read_text()
+
+
+def test_a_restrictive_verdict_is_still_reused(stub, tmp_path):
+    """The half worth caching: the human is not asked the same question twice."""
+    server, log = stub(RESTRICTIVE)
+    state = tmp_path / "s"
+    for _ in range(3):
+        run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce")
+    assert len(log.read_text().splitlines()) == 1
+    entries = json.loads((state / "cache.json").read_text())
+    assert {v["d"] for v in entries.values()} == {"ask"}
+
+
+def test_a_legacy_allow_entry_is_ignored(stub, tmp_path):
+    """A cache written by the previous version may hold an allow; do not trust it."""
+    server, log = stub(RESTRICTIVE)
+    state = tmp_path / "s"
+    state.mkdir(parents=True, exist_ok=True)
+    key = gates.cache_key("claude", "Bash", "rm -rf ./build", "", "s1")
+    (state / "cache.json").write_text(json.dumps({key: {"d": "allow", "r": "old", "ts": 9e9}}))
+    run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce")
+    assert len(log.read_text().splitlines()) == 1          # judged again
+    record = json.loads((state / "decisions.jsonl").read_text().splitlines()[-1])
+    assert record["source"] == "jev"
