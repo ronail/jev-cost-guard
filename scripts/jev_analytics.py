@@ -92,11 +92,39 @@ def analytics_dir() -> str:
     return os.path.join(base, "jev-cost-guard")
 
 
+def state_home() -> str:
+    state = (os.environ.get("XDG_STATE_HOME") or "").strip()
+    if state:
+        return os.path.expanduser(state)
+    return os.path.join(os.path.expanduser("~"), ".local", "state")
+
+
+def ledger_pointer() -> str:
+    return os.path.join(state_home(), "jev-cost-guard", "ledger-path")
+
+
+def published_ledger() -> str | None:
+    """The path the MCP server last wrote to, if it published one.
+
+    The server runs in a different process: it sees `JEV_CALL_LOG` and
+    `PLUGIN_DATA` from the host's MCP config, this script does not. Without the
+    pointer the two resolve different files and every report is empty.
+    """
+    try:
+        with open(ledger_pointer(), encoding="utf-8") as fh:
+            path = fh.read().strip()
+    except OSError:
+        return None
+    return os.path.expanduser(path) if path else None
+
+
 def ledger_path() -> str:
     explicit = (os.environ.get("JEV_CALL_LOG") or "").strip()
     if explicit:
         return os.path.expanduser(explicit)
-    return os.path.join(analytics_dir(), LEDGER_NAME)
+    if (os.environ.get("JEV_ANALYTICS_DIR") or "").strip():
+        return os.path.join(analytics_dir(), LEDGER_NAME)
+    return published_ledger() or os.path.join(analytics_dir(), LEDGER_NAME)
 
 
 # ── ledger ────────────────────────────────────────────────────────────────────
