@@ -186,3 +186,49 @@ def test_agy_cli_is_scoped_like_the_other_runtimes(tmp_path, agnostic):
         encoding="utf-8",
     )
     assert agnostic.check(str(target)) == []
+
+
+# ---- hook command paths -----------------------------------------------------
+
+def _hook_commands(node, path=""):
+    """Every `command` string in a hooks.json, with where it sits."""
+    if isinstance(node, dict):
+        if isinstance(node.get("command"), str):
+            yield path, node["command"]
+        for key, value in node.items():
+            yield from _hook_commands(value, f"{path}/{key}")
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from _hook_commands(value, f"{path}[{index}]")
+
+
+def test_hook_commands_never_reference_plugin_root():
+    """Measured on agy 1.4.12: it does not expand `${PLUGIN_ROOT}` in hook commands.
+
+    A hook written as `${PLUGIN_ROOT}/hooks/x.py` arrives at the shell with the variable
+    unset, so the path becomes `/hooks/x.py` and the event fails with "can't open file".
+    Antigravity runs hook commands with the working directory set to the plugin root, so a
+    relative `./hooks/...` path is the form that works — and the one every other group on
+    this file already uses.
+    """
+    commands = list(_hook_commands(json.loads((REPO / "hooks.json").read_text())))
+    assert commands, "root hooks.json declares no command hooks"
+    offenders = [f"{path}: {cmd}" for path, cmd in commands if "${PLUGIN_ROOT}" in cmd]
+    assert not offenders, (
+        "Antigravity does not expand ${PLUGIN_ROOT} in hook commands; use \"./hooks/...\":\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_hook_commands_resolve_from_the_plugin_root():
+    """Every command must run a script that exists relative to the plugin root."""
+    data = json.loads((REPO / "hooks.json").read_text())
+    checked = 0
+    for _path, command in _hook_commands(data):
+        script = command.split('"')[1] if '"' in command else command.split()[-1]
+        if not script.endswith(".py"):
+            continue
+        assert script.startswith("./"), f"hook script must be plugin-root relative: {script}"
+        assert (REPO / script[2:]).exists(), f"hook script missing from the package: {script}"
+        checked += 1
+    assert checked, "no hook scripts were checked"

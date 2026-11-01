@@ -694,8 +694,21 @@ What each payload carries (real keys, nothing omitted):
 | `PreInvocation`/`PostInvocation` | `invocationNum`, `initialNumSteps`, + common |
 | `Stop` | `executionNum`, `terminationReason`, `fullyIdle`, `error`, + common |
 
-Two traps found the hard way:
+Three traps found the hard way:
 
+- **`${PLUGIN_ROOT}` is not expanded in hook commands.** Antigravity runs a hook command
+  with the working directory set to the plugin root and no plugin variables in the
+  environment, so `python3 "/hooks/x.py"` is what the shell actually sees and the event fails:
+
+  ```
+  post-tool hook "jsonhook__jev-post-tool_PostToolUse_0_0" failed:
+  Python: can't open file '/hooks/claude-codex-jev-verdict.py': [Errno 2] No such file or directory
+  ```
+
+  Write the path relative to the plugin root — `python3 "./hooks/x.py"` — which is what
+  every group in this repo's `hooks.json` does. (`PLUGIN_ROOT` *is* exported to plugin MCP
+  servers, which is why `mcp_config.json` may use it and hook commands may not. The
+  no-plugin installer sidesteps that by writing absolute paths.)
 - **`PreToolUse` must answer `{"decision": …}`.** Returning `{}` is treated as a **deny**
   — the run failed with `tool call denied by pre-tool hook` and the model reported the
   blocked command instead.

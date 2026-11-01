@@ -61,9 +61,14 @@ number you quote — labelled as an estimate.
   which needs the hook declared in a config layer and trusted by hash. `PreToolUse` and
   `PostToolUse` wrap handlers in `{matcher, hooks:[…]}`; the other four events are flat
   arrays.
-- **Two hook gotchas:** `PreToolUse` must answer `{"decision": …}` (`{}` is a deny), and
+- **Three hook gotchas:** `PreToolUse` must answer `{"decision": …}` (`{}` is a deny);
   `PostToolUse` carries **no tool output** — the result is only in the transcript, which is
-  why the verdict gate runs on `PreInvocation` instead.
+  why the verdict gate runs on `PreInvocation` instead; and **`${PLUGIN_ROOT}` is not
+  expanded in hook commands.** They run with cwd = the plugin root and no plugin variables,
+  so write `python3 "./hooks/x.py"`. A `${PLUGIN_ROOT}` path reaches the shell unsubstituted
+  and the event dies with `can't open file '/hooks/x.py'` while the plugin still reports its
+  hook count. MCP servers *do* receive `PLUGIN_ROOT` — hook commands do not, which is what
+  makes the two easy to confuse.
 
 ## Skills index: why pruning is never mid-session
 
