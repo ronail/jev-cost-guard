@@ -708,7 +708,7 @@ gate degrades to always-asking rather than to always-allowing.
 | host | pre-tool `ask` | grant scope readable | behaviour |
 |---|---|---|---|
 | **Claude Code** | `PreToolUse` | **yes** — `permissionDecision.source` / `grantScope` | one-shot is never remembered; session/always is honoured |
-| **Codex** | `PreToolUse` | no — session rollouts carry `approval_policy`, not a per-call grant | the run is recorded without a scope |
+| **Codex** | `PreToolUse` | no — session rollouts carry `approval_policy`, not a per-call grant | the run is recorded without a scope (`PostToolUse`, verified live) |
 | **Antigravity** | `PreToolUse` | no — its transcript has no permission rows | recorded without a scope (`jev-post-tool`, verified live) |
 | **Hermes** | none — `pre_tool_call` can block or approve, it cannot *ask* | n/a | nothing to remember; its gates stay advisory |
 
