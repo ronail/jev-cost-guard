@@ -238,7 +238,7 @@ faster it pays off. No other model is involved.
 | `hooks/antigravity-jev-route.py` | Antigravity skill hint (opt-in, `"enabled": false`): one roster line per session |
 | `hooks/pretool-gate.py` | pre-tool permission gate for Claude Code / Codex / Antigravity: belts → one jev request → ask/deny, audit by default |
 | `hooks/lib/gates.py` | the pure half: question wording, thresholds, belts, `decide_command`, `decide_completion` |
-| `hooks/gate-policy.json` | one policy for every gate and host: mode, thresholds, state cap, cache TTL, allow mode |
+| `hooks/gate-policy.json` | one policy for every gate and host: mode, thresholds, state cap, cache scope and pruning, allow mode |
 | `hooks.json` | Antigravity plugin wiring for that gate (root — Antigravity reads no other path) |
 | `scripts/install-antigravity.py` | no-plugin workspace install: `.agents/mcp_config.json` + `.agents/hooks.json`, merged |
 | `hooks/hooks.json` | Claude Code plugin wiring for that gate (PostToolUse) |
@@ -644,7 +644,7 @@ Three tiers, cheapest first:
 |---|---|---|
 | 0 | deterministic belts (`RISK_BELTS`: recursive delete, history rewrite, `DROP TABLE`, `dd of=`, global install, publish/deploy, remote copy, network upload, pipe-to-shell, `sudo`, container/system wipe, credential read) | free — a routine command (`npm test`, `git status`, `rg`) never leaves this tier |
 | 1 | one jev request, two questions: a `choice` risk call (allow / ask / deny) + a `noul` "destroys state outside the working tree?" cross-check | ~1 s, one request, only for commands tier 0 flagged |
-| 2 | per-session cache (1 h TTL) + a 12 000-char state cap | repeats are free; an oversized command is answered locally because judging a head and a tail is not judging the command |
+| 2 | session-scoped cache (`session` + `cwd` in the key, 24 h pruning) + a 12 000-char state cap | the same command in the same place is judged once; an oversized command is answered locally because judging a head and a tail is not judging the command |
 
 Two invariants, both taken from published implementations rather than invented here:
 

@@ -279,8 +279,17 @@ def oversized_decision(command: str, policy: dict) -> tuple[str, str] | None:
     )
 
 
-def cache_key(host: str, tool: str, command: str) -> str:
-    digest = hashlib.sha256(f"{host}\x00{tool}\x00{command}".encode("utf-8")).hexdigest()
+def cache_key(host: str, tool: str, command: str, cwd: str = "", session: str = "") -> str:
+    """Identity of a *decision*, not of a command string.
+
+    A verdict is only reusable where it was reached: `rm -rf ./build` is a different
+    risk in a different directory, and a fresh session inherits nothing from the last
+    one. So the session and the working directory belong in the key, and the TTL is
+    only a pruning backstop — never the thing that makes the cache correct.
+    """
+    digest = hashlib.sha256(
+        f"{host}\x00{tool}\x00{command}\x00{cwd}\x00{session}".encode("utf-8")
+    ).hexdigest()
     return f"sha256:{digest[:32]}"
 
 
