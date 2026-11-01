@@ -644,7 +644,7 @@ Three tiers, cheapest first:
 |---|---|---|
 | 0 | deterministic belts (`RISK_BELTS`: recursive delete, history rewrite, `DROP TABLE`, `dd of=`, global install, publish/deploy, remote copy, network upload, pipe-to-shell, `sudo`, container/system wipe, credential read) | free — a routine command (`npm test`, `git status`, `rg`) never leaves this tier |
 | 1 | one jev request, two questions: a `choice` risk call (allow / ask / deny) + a `noul` "destroys state outside the working tree?" cross-check | ~1 s, one request, only for commands tier 0 flagged |
-| 2 | session-scoped cache (`session` + `cwd` in the key, 24 h pruning) + a 12 000-char state cap | the same command in the same place is judged once; an oversized command is answered locally because judging a head and a tail is not judging the command |
+| 2 | session-scoped cache (`session` + `cwd` in the key, 24 h pruning) + a 12 000-char state cap | an `ask`/`deny` is not re-asked in the same place; an `allow` is judged again every time, because a command string says nothing about what it will now delete — and an oversized command is answered locally, since judging a head and a tail is not judging the command |
 
 Two invariants, both taken from published implementations rather than invented here:
 
