@@ -247,6 +247,29 @@ def test_ledger_is_trimmed_when_it_grows(script, srv, monkeypatch):
     assert os.path.getsize(script.ledger_path()) <= 2000 + 400
 
 
+def test_trim_is_atomic_and_leaves_no_temp_file(script, srv, monkeypatch):
+    """A crash mid-trim must not leave the ledger empty; os.replace only."""
+    monkeypatch.setattr(srv, "_LEDGER_MAX_BYTES", 2000)
+    monkeypatch.setattr(srv, "_LEDGER_KEEP_LINES", 5)
+    for i in range(20):
+        srv._USAGE.update({"in": i, "out": 1, "model": "jev-1.13-free"})
+        srv._analytics_record("summarize", 100, "v")
+    path = script.ledger_path()
+    assert not list(Path(path).parent.glob(Path(path).name + ".*.tmp"))
+
+
+def test_failed_replace_keeps_the_old_ledger(script, srv, monkeypatch):
+    monkeypatch.setattr(srv, "_LEDGER_KEEP_LINES", 2)
+    for i in range(4):
+        srv._USAGE.update({"in": i, "out": 1, "model": "jev-1.13-free"})
+        srv._analytics_record("summarize", 100, "v")
+    before = script.read_rows()
+    monkeypatch.setattr(srv.os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("disk")))
+    srv._analytics_trim(script.ledger_path())
+    assert script.read_rows() == before  # nothing truncated
+    assert not list(Path(script.ledger_path()).parent.glob("*.tmp"))
+
+
 # ── pricing ───────────────────────────────────────────────────────────────────
 
 

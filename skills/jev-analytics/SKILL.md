@@ -130,7 +130,7 @@ reseller guess would be off by up to 40×.
 | situation | response |
 |---|---|
 | script missing / not executable | say `jev analytics: script unavailable` once, stop reporting, keep working |
-| `report` exits 1 with no output | print nothing — no jev call to report |
+| `report` exits 1 with no output | print **nothing at all** — not even a line explaining why. A meta-comment about the missing block is itself the noise the switch exists to remove |
 | jev unreachable | the tool already returned the error; there is no row, so no report |
 | report would say `saved: -N tok` | print it. A loss is information: the body was too small for a jev call |
 
