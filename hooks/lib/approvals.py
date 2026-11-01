@@ -37,8 +37,15 @@ def _load() -> dict:
         return {}
 
 
-def record_run(key: str) -> None:
+# Modes in which the host answers its own prompts instead of asking a person. Recording
+# an "approval" there would be a misnomer: nobody was asked, so nothing was granted.
+NO_PROMPT_MODES = ("bypassPermissions", "dangerouslySkipPermissions")
+
+
+def record_run(key: str, permission_mode: str = "default") -> None:
     """PostToolUse: this exact command ran here, so a human (or a rule) allowed it."""
+    if str(permission_mode or "").strip() in NO_PROMPT_MODES:
+        return
     try:
         data = _load()
         now = time.time()

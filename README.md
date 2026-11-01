@@ -686,7 +686,9 @@ one that misses a case. State lives in `$TMPDIR/jev-gate` (`JEV_GATE_STATE_DIR`)
 `hooks/lib/approvals.py` records that `(session, cwd, command)` and the retry passes
 through instead of asking again: the harness either applies the approval it holds or asks
 itself, so the retry is not nagged twice. When it did not run, the question stands — a
-denial must never be laundered into silence by a later execution. Antigravity has no
+denial must never be laundered into silence by a later execution. In `bypassPermissions`
+(`--dangerously-skip-permissions`) nothing is recorded at all: nobody was asked, so
+nothing was granted, and the gate does not pretend otherwise. Antigravity has no
 PostToolUse group wired yet, so it keeps asking there; the behaviour degrades to the
 previous one, never to a widened permission.
 

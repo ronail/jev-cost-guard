@@ -106,8 +106,10 @@ def _record_execution(event: dict, tool: str) -> None:
         host = os.environ.get("JEV_GATE_HOST", "claude")
         session = str(event.get("session_id") or event.get("conversationId") or "")
         cwd = str(event.get("cwd") or args.get("cwd") or "")
-        approvals.record_run(gates.cache_key(host, tool, command, cwd, session))
-        approvals.record_run(gates.cache_key(host, tool, command, cwd, ""))
+        mode = str(event.get("permission_mode") or "default")
+        for key in (gates.cache_key(host, tool, command, cwd, session),
+                    gates.cache_key(host, tool, command, cwd, "")):
+            approvals.record_run(key, mode)
     except Exception:
         return
 

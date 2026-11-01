@@ -544,3 +544,17 @@ def test_the_post_tool_hook_records_what_ran(tmp_path):
     assert result.stdout == ""                        # bookkeeping never talks to the model
     written = json.loads((state / "executed.json").read_text())
     assert gates.cache_key("claude", "Bash", "rm -rf ./build", "/w/app", "s1") in written
+
+
+def test_a_bypass_mode_run_is_not_an_approval(tmp_path):
+    """Nobody was asked, so nothing was granted: bypass/yolo must not silence the gate."""
+    state = tmp_path / "s"
+    post = ROOT / "hooks" / "claude-codex-jev-verdict.py"
+    env = dict(os.environ, JEV_GATE_STATE_DIR=str(state))
+    event = {"hook_event_name": "PostToolUse", "session_id": "s1", "cwd": "/w/app",
+             "permission_mode": "bypassPermissions", "tool_name": "Bash",
+             "tool_input": {"command": "rm -rf ./build"},
+             "tool_result": {"output": "ok"}}
+    subprocess.run([sys.executable, str(post)], input=json.dumps(event),
+                   capture_output=True, text=True, env=env, timeout=60)
+    assert not (state / "executed.json").exists()
