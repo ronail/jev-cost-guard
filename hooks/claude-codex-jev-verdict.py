@@ -85,6 +85,17 @@ def _flatten(value) -> str:
     return str(value)
 
 
+def _tool_of(event: dict) -> str:
+    """Tool name from either envelope: Claude Code/Codex, or Antigravity's toolCall."""
+    return str(event.get("tool_name") or "").strip() or str((event.get("toolCall") or {}).get("name") or "")
+
+
+def _host_of(event: dict) -> str:
+    if "toolCall" in event or "conversationId" in event:
+        return "antigravity"
+    return os.environ.get("JEV_GATE_HOST", "claude")
+
+
 def _record_execution(event: dict, tool: str) -> None:
     """Note that this exact command ran, so the pre-tool gate need not ask again.
 
@@ -97,19 +108,22 @@ def _record_execution(event: dict, tool: str) -> None:
         return
     try:
         args = event.get("tool_input")
-        args = args if isinstance(args, dict) else {}
+        if not isinstance(args, dict):
+            args = (event.get("toolCall") or {}).get("args") or {}   # Antigravity envelope
         if not gates.is_shell_tool(tool, args):
             return
         command = gates.extract_command(args)
         if not command:
             return
-        host = os.environ.get("JEV_GATE_HOST", "claude")
+        host = _host_of(event)
         session = str(event.get("session_id") or event.get("conversationId") or "")
         cwd = str(event.get("cwd") or args.get("cwd") or "")
         mode = str(event.get("permission_mode") or "default")
         grant = approvals.grant_scope(approvals.last_permission(str(event.get("transcript_path") or "")))
-        if grant not in ("session", "always"):
-            return                     # a one-shot yes, or nobody was asked: not a rule
+        if grant == "once":
+            return                     # explicitly one-shot: never remembered
+        # None means the host records no grant scope (Codex, Antigravity) — the ledger keeps
+        # the fact, and cache.approvalScope decides whether it may silence the gate.
         for key in (gates.cache_key(host, tool, command, cwd, session),
                     gates.cache_key(host, tool, command, cwd, "")):
             approvals.record_run(key, mode)
@@ -155,7 +169,7 @@ def main() -> None:
         sys.exit(0)
     if not isinstance(event, dict):
         sys.exit(0)
-    tool = str(event.get("tool_name") or "")
+    tool = _tool_of(event)
     if not tool or _is_jev_tool(tool):
         sys.exit(0)
     _record_execution(event, tool)   # before the size check: an approval is not a payload

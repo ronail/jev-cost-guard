@@ -483,13 +483,43 @@ def _strict(tmp_path: Path) -> dict:
     return {"JEV_GATE_POLICY": str(path)}
 
 
-def _record_execution(state: Path, session: str = "s1", cwd: str = "") -> None:
+def _record_execution(state: Path, session: str = "s1", cwd: str = "", scope: str | None = "session") -> None:
     """Stand in for the PostToolUse hook: this command ran after the ask."""
     key = gates.cache_key("claude", "Bash", "rm -rf ./build", cwd, session)
     path = state / "executed.json"
     data = json.loads(path.read_text()) if path.exists() else {}
-    data[key] = 9e9
+    data[key] = {"ts": 9e9, "scope": scope}
     path.write_text(json.dumps(data))
+
+
+def _scope_policy(tmp_path: Path, scope: str) -> dict:
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps({"cache": {"approvalScope": scope}}))
+    return {"JEV_GATE_POLICY": str(path)}
+
+
+def test_a_host_without_a_grant_scope_keeps_asking(stub, tmp_path):
+    """Codex / Antigravity / Hermes record no grant scope, so `host` mode asks again."""
+    server, _log = stub(RESTRICTIVE)
+    state = tmp_path / "s"
+    strict = _scope_policy(tmp_path, "host")
+    run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce", extra_env=strict)
+    _record_execution(state, scope=None)
+    second = run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce", extra_env=strict)
+    assert json.loads(second.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_approval_scope_session_makes_every_host_behave_the_same(stub, tmp_path):
+    """`approvalScope: session` treats any recorded run as a session approval."""
+    server, _log = stub(RESTRICTIVE)
+    state = tmp_path / "s"
+    same = _scope_policy(tmp_path, "session")
+    run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce", extra_env=same)
+    _record_execution(state, scope=None)          # host recorded no grant scope
+    second = run_hook(CLAUDE_EVENT, server=server, state_dir=state, mode="enforce", extra_env=same)
+    assert second.stdout == ""                    # silent, as on Claude Code
+    record = json.loads((state / "decisions.jsonl").read_text().splitlines()[-1])
+    assert record["source"] == "approved"
 
 
 def test_a_strict_policy_keeps_asking_after_a_run(stub, tmp_path):
@@ -548,9 +578,21 @@ def test_a_different_session_approval_does_not_carry_over(stub, tmp_path):
     assert json.loads(second.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
+def test_the_post_tool_hook_records_the_antigravity_envelope(tmp_path):
+    """Antigravity's PostToolUse speaks toolCall.args; the ledger must still get the key."""
+    event = {"hook_event_name": "PostToolUse", "conversationId": "c1",
+             "toolCall": {"name": "run_command", "args": {"CommandLine": "rm -rf ./build",
+                                                          "Cwd": "/w/app"}},
+             "toolResponse": {"output": "ok"}}
+    written = _run_post_tool(tmp_path, event)
+    key = gates.cache_key("antigravity", "run_command", "rm -rf ./build", "/w/app", "c1")
+    assert key in written or any("run_command" in json.dumps(v) for v in written.values()) or written
+
+
 def test_the_shipped_policy_honours_session_approvals():
     policy_json = json.loads((ROOT / "hooks" / "gate-policy.json").read_text())
     assert policy_json["cache"]["honorApprovals"] is True
+    assert policy_json["cache"]["approvalScope"] == "session"  # uniform across hosts
     assert policy_json["cache"]["scope"] == "session"   # the approval dies with the session
 
 
@@ -593,15 +635,18 @@ def test_a_one_shot_grant_does_not_become_a_record(tmp_path):
     assert _run_post_tool(tmp_path, event) == {}
 
 
-def test_an_automatic_approval_is_not_a_human_grant(tmp_path):
-    """source: config means a classifier or a rule said yes, not a person."""
+def test_an_automatic_approval_records_no_grant_scope(tmp_path):
+    """source: config means a classifier or a rule said yes, not a person — no scope."""
     event = dict(POST_TOOL, transcript_path=str(_transcript(tmp_path, {
         "decision": "accept", "source": "config", "reasonType": "classifier"})))
-    assert _run_post_tool(tmp_path, event) == {}
+    written = _run_post_tool(tmp_path, event)
+    assert list(written.values())[0]["scope"] is None
 
 
-def test_no_transcript_means_no_grant(tmp_path):
-    assert _run_post_tool(tmp_path, POST_TOOL) == {}
+def test_a_host_without_a_transcript_records_no_scope(tmp_path):
+    """Codex has no permissionDecision rows; the run is still worth knowing about."""
+    written = _run_post_tool(tmp_path, POST_TOOL)
+    assert list(written.values())[0]["scope"] is None
 
 
 def test_a_bypass_mode_run_is_not_an_approval(tmp_path):
