@@ -42,16 +42,22 @@ def _load() -> dict:
 NO_PROMPT_MODES = ("bypassPermissions", "dangerouslySkipPermissions")
 
 
-def record_run(key: str, permission_mode: str = "default") -> None:
-    """PostToolUse: this exact command ran here, so a human (or a rule) allowed it."""
+def record_run(key: str, permission_mode: str = "default", scope: str | None = None) -> None:
+    """PostToolUse: this command ran here, and with which grant if the host records one.
+
+    `scope` is "session"/"always" when the host names the grant (Claude Code does) and
+    None when it does not (Codex, Antigravity, Hermes). Recording None is deliberate: the
+    pre-tool gate can then decide, per `cache.approvalScope`, whether a host without scope
+    evidence may be treated as a session approval.
+    """
     if str(permission_mode or "").strip() in NO_PROMPT_MODES:
         return
     try:
         data = _load()
         now = time.time()
         data = {k: v for k, v in data.items()
-                if isinstance(v, (int, float)) and now - float(v) < PRUNE_AFTER_S}
-        data[key] = now
+                if isinstance(v, dict) and now - float(v.get("ts", 0)) < PRUNE_AFTER_S}
+        data[key] = {"ts": now, "scope": scope}
         if len(data) > 2_000:
             data = dict(sorted(data.items(), key=lambda kv: float(kv[1]), reverse=True)[:2_000])
         with open(_path(), "w", encoding="utf-8") as handle:
@@ -110,8 +116,31 @@ def grant_scope(decision: dict) -> str | None:
     return "once" if decision.get("grantScope") == "once" else "session"
 
 
+def entry(key: str) -> dict:
+    """What we know about this exact command: when it ran, and the grant the host named."""
+    record = _load().get(key)
+    if not isinstance(record, dict):
+        return {}
+    if time.time() - float(record.get("ts", 0)) >= PRUNE_AFTER_S:
+        return {}
+    return record
+
+
 def was_executed(key: str) -> bool:
-    stamp = _load().get(key)
-    if not isinstance(stamp, (int, float)):
+    return bool(entry(key))
+
+
+def honoured(key: str, approval_scope: str = "host") -> bool:
+    """May this recorded run silence the gate?
+
+    `host` (default): only when the harness named a session or permanent human grant —
+    Claude Code's transcript does, the others do not, so they keep asking.
+    `session`: any recorded run counts, which is what makes the behaviour identical on
+    Codex, Antigravity and Hermes, at the cost of remembering a one-shot yes there.
+    """
+    record = entry(key)
+    if not record:
         return False
-    return time.time() - float(stamp) < PRUNE_AFTER_S
+    if str(record.get("scope") or "") in ("session", "always"):
+        return True
+    return str(approval_scope or "host").lower() == "session"

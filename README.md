@@ -701,9 +701,23 @@ name, a hook-issued approval — records nothing and the gate keeps asking, whic
 failure mode that costs a prompt instead of a permission.
 
 `grantScope` is an internal field, not documented API: if a future release renames it the
-gate degrades to always-asking rather than to always-allowing. In `bypassPermissions`
-nothing is recorded at all. Antigravity has no PostToolUse group wired, so it keeps asking
-there. `cache.honorApprovals: false` disables all of this.
+gate degrades to always-asking rather than to always-allowing.
+
+**Which harnesses can tell the difference** — measured, not assumed:
+
+| host | pre-tool `ask` | grant scope readable | behaviour |
+|---|---|---|---|
+| **Claude Code** | `PreToolUse` | **yes** — `permissionDecision.source` / `grantScope` | one-shot is never remembered; session/always is honoured |
+| **Codex** | `PreToolUse` | no — session rollouts carry `approval_policy`, not a per-call grant | the run is recorded without a scope |
+| **Antigravity** | `PreToolUse` | no — its transcript has no permission rows | recorded without a scope (`jev-post-tool`, verified live) |
+| **Hermes** | none — `pre_tool_call` can block or approve, it cannot *ask* | n/a | nothing to remember; its gates stay advisory |
+
+`cache.approvalScope` decides what a scope-less record means. **`"session"`** (shipped):
+any recorded run counts, so every host with an `ask` gate behaves the same — on Claude Code
+one-shot grants are still excluded, because they are never recorded at all. **`"host"`**:
+only a grant the harness actually named counts, so Codex and Antigravity keep asking after
+every run. `cache.honorApprovals: false` turns the mechanism off everywhere, and in
+`bypassPermissions` nothing is recorded regardless.
 
 ### Antigravity
 
