@@ -470,9 +470,6 @@ def _ledger_pointer() -> str:
     return os.path.join(_state_home(), "jev-cost-guard", "ledger-path")
 
 
-_PUBLISHED: dict[str, bool] = {}
-
-
 def _analytics_publish(path: str) -> None:
     """Tell the report script where this process is writing.
 
@@ -481,9 +478,11 @@ def _analytics_publish(path: str) -> None:
     host's MCP config, so the script's copy of the same resolution logic lands on
     a different file and every report comes back empty. A pointer written to a
     fixed, env-independent location closes the gap.
+
+    Republished on every append rather than cached: a cache outlives the pointer,
+    so deleting that file (a cleanup, another tool) leaves `report` blind for the
+    rest of this process's life. Observed on a live turn.
     """
-    if _PUBLISHED.get(path):
-        return
     pointer = _ledger_pointer()
     tmp = f"{pointer}.{os.getpid()}.tmp"
     try:
@@ -491,7 +490,6 @@ def _analytics_publish(path: str) -> None:
         with open(tmp, "w", encoding="utf-8") as fh:
             fh.write(path + "\n")
         os.replace(tmp, pointer)
-        _PUBLISHED[path] = True
     except OSError:
         try:
             os.unlink(tmp)

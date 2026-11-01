@@ -279,7 +279,6 @@ def test_script_follows_the_server_across_processes(script, srv, monkeypatch, tm
     monkeypatch.delenv("JEV_ANALYTICS_DIR", raising=False)
     monkeypatch.delenv("JEV_CALL_LOG", raising=False)
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "st"))
-    monkeypatch.setattr(srv, "_PUBLISHED", {})
     monkeypatch.setenv("PLUGIN_DATA", str(tmp_path / "pd"))  # server-only env
     srv._USAGE.update({"in": 10, "out": 2, "model": "jev-1.13-free"})
     srv._analytics_record("screen", 4000, "v")
@@ -294,7 +293,6 @@ def test_script_follows_the_server_across_processes(script, srv, monkeypatch, tm
 def test_explicit_ledger_beats_the_pointer(script, srv, monkeypatch, tmp_path):
     monkeypatch.delenv("JEV_ANALYTICS_DIR", raising=False)
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "st"))
-    monkeypatch.setattr(srv, "_PUBLISHED", {})
     srv._USAGE.update({"in": 1, "out": 1, "model": "jev-1.13-free"})
     srv._analytics_record("screen", 10, "v")
     monkeypatch.setenv("JEV_CALL_LOG", str(tmp_path / "mine.jsonl"))
@@ -304,12 +302,27 @@ def test_explicit_ledger_beats_the_pointer(script, srv, monkeypatch, tmp_path):
 def test_pointer_is_published_atomically(script, srv, monkeypatch, tmp_path):
     monkeypatch.delenv("JEV_ANALYTICS_DIR", raising=False)
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "st"))
-    monkeypatch.setattr(srv, "_PUBLISHED", {})
     srv._USAGE.update({"in": 1, "out": 1, "model": "jev-1.13-free"})
     srv._analytics_record("screen", 10, "v")
     pointer = pathlib.Path(srv._ledger_pointer())
     assert pointer.read_text().strip() == srv._analytics_ledger()
     assert not list(pointer.parent.glob("*.tmp"))
+
+
+def test_pointer_is_republished_after_deletion(script, srv, monkeypatch, tmp_path):
+    """A live turn caught this: a cached publish leaves `report` blind forever
+    once the pointer file is removed by a cleanup or another tool."""
+    monkeypatch.delenv("JEV_ANALYTICS_DIR", raising=False)
+    monkeypatch.delenv("JEV_CALL_LOG", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "st"))
+    srv._USAGE.update({"in": 1, "out": 1, "model": "jev-1.13-free"})
+    srv._analytics_record("screen", 10, "v")
+    pointer = pathlib.Path(srv._ledger_pointer())
+    assert pointer.exists()
+    pointer.unlink()
+    srv._USAGE.update({"in": 2, "out": 1, "model": "jev-1.13-free"})
+    srv._analytics_record("screen", 10, "v")
+    assert pointer.exists() and pointer.read_text().strip() == srv._analytics_ledger()
 
 
 # ── pricing ───────────────────────────────────────────────────────────────────
