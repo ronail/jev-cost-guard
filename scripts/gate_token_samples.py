@@ -86,6 +86,60 @@ def tokens(text: str) -> int:
     return max(1, round(len(text) / 4))
 
 
+def _context_reads(path: str) -> list[int]:
+    """Tokens the main model read on each recorded turn (Claude Code only).
+
+    `cache_read + input + cache_creation` is what a turn actually costs to re-read, and
+    it is the only honest answer to "how much would the main model have paid". Antigravity
+    records no usage in its transcript, so it contributes nothing here rather than a guess.
+    """
+    reads: list[int] = []
+    try:
+        handle = open(path, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        return reads
+    with handle:
+        for line in handle:
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            message = row.get("message") if isinstance(row, dict) else None
+            usage = message.get("usage") if isinstance(message, dict) else None
+            if not isinstance(usage, dict):
+                continue
+            total = sum(int(usage.get(key) or 0) for key in
+                        ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+            if total:
+                reads.append(total)
+    return reads
+
+
+def main_model() -> dict:
+    """What the main model pays: audit 0, enforce one reason line, vs the alternative.
+
+    The alternative is the obvious design — paste the run facts into the main model's
+    prompt and ask it to judge itself. That puts the evidence in the main context and
+    spends a whole turn over it, so both numbers are reported beside what the gate emits.
+    """
+    reads: list[int] = []
+    for pattern in TRANSCRIPT_GLOBS:
+        for path in glob.glob(os.path.expanduser(pattern)):
+            reads.extend(_context_reads(path))
+    reads.sort()
+    stop_rows_data = stop_rows()
+    askable = [r for r in stop_rows_data if r["has_edits"] and r["has_claim"] and not r["verified"]]
+    return {
+        "sessions": len({r["session"] for r in stop_rows_data}),
+        "turns_with_usage": len(reads),
+        "read_median": reads[len(reads) // 2] if reads else None,
+        "read_p90": reads[int(len(reads) * 0.9)] if reads else None,
+        "read_max": reads[-1] if reads else None,
+        "evidence_tokens": sorted(round(r["state_chars"] / 4) for r in askable),
+        "enforce_reason_tokens": 72,  # longest stop reason observed in a real log: 288 chars
+    }
+
+
 def stop_rows() -> list[dict]:
     rows: list[dict] = []
     paths: list[str] = []
@@ -145,7 +199,8 @@ def main() -> int:
 
     stop = stop_rows()
     pre = pretool_rows()
-    data = {"stop": stop, "pretool": pre}
+    main = main_model()
+    data = {"stop": stop, "pretool": pre, "main_model": main}
     if args.json:
         print(json.dumps(data, indent=2))
         return 0
@@ -180,6 +235,19 @@ def main() -> int:
         print(f"state per call : {pre['state_chars'][0]}–{pre['state_chars'][-1]} chars "
               f"(~{tokens('x' * pre['state_chars'][0])}–{tokens('x' * pre['state_chars'][-1])} tokens)")
     print(f"answer         : {pre['answers_chars']} chars (~{tokens('x' * pre['answers_chars'])} tokens)")
+
+    print()
+    print("WHO PAYS — the main model's side of the bill")
+    if main["read_median"]:
+        print(f"one main-model turn re-reads the context: median {main['read_median']:,} tokens, "
+              f"p90 {main['read_p90']:,}, max {main['read_max']:,} "
+              f"({main['turns_with_usage']:,} measured turns)")
+    print(f"audit mode   : 0 tokens added to the main context (the hook returns nothing)")
+    print(f"enforce mode : one reason line, ~{main['enforce_reason_tokens']} tokens")
+    if main["evidence_tokens"]:
+        low, high = main["evidence_tokens"][0], main["evidence_tokens"][-1]
+        print(f"the alternative (run facts into the prompt, model judges itself): "
+              f"+{low}-{high} tokens of evidence, plus a whole turn over the context above")
     return 0
 
 
