@@ -237,7 +237,7 @@ def build_report(rows: list[dict], model: str = "",
         cost = saved / 1_000_000 * pin
         if saved < 0:
             lines.append(
-                f"  saved     {saved:,} tok ≈ {_usd(-cost)} net loss "
+                f"  saved     {saved:,} tok ≈ -{_usd(abs(cost))} net loss "
                 f"(verdict cost more than the body) @ {label}"
             )
         else:
