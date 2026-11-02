@@ -319,9 +319,17 @@ COMPLETION_QUESTIONS: dict = {"unverified": UNVERIFIED_QUESTION}
 # actually ran a check. Belt matching is on the *runner's own summary line* as well
 # as the command, because a failing suite is recorded without any error field.
 MUTATING_TOOLS: tuple[str, ...] = (
-    "write", "write_to_file", "edit", "multiedit", "str_replace", "str_replace_editor",
-    "replace_file_content", "multi_replace_file_content", "apply_patch", "notebookedit",
-    "create_file", "insert_content",
+    "write", "write_file", "write_to_file", "edit", "multiedit", "str_replace",
+    "str_replace_editor", "replace_file_content", "multi_replace_file_content",
+    "apply_patch", "notebookedit", "create_file", "insert_content", "delete_file",
+)
+# A host renames its tools between releases (Antigravity's write call arrives as
+# `write_file`, the docs say `write_to_file`), and a completion gate that silently
+# stops seeing edits is a gate that always says "nothing changed". So the shape of the
+# name counts too, not just a frozen list.
+_MUTATION_SHAPE = re.compile(
+    r"(?:^|[._:])(write|edit|create|insert|replace|patch|apply|delete|remove|move|rename|mkdir|touch)",
+    re.IGNORECASE,
 )
 CHECK_COMMAND = re.compile(
     r"(?:\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|tests|check|lint|typecheck|build|verify|ci)\b"
@@ -353,7 +361,9 @@ DONE_HINT = re.compile(
 
 def is_mutating_tool(name: str) -> bool:
     low = (name or "").lower()
-    return any(low == tool or low.endswith(tool) for tool in MUTATING_TOOLS)
+    if any(low == tool or low.endswith(tool) for tool in MUTATING_TOOLS):
+        return True
+    return bool(_MUTATION_SHAPE.search(low))
 
 
 def looks_like_check(command: str) -> bool:

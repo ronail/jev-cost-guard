@@ -237,6 +237,8 @@ faster it pays off. No other model is involved.
 | `hooks/antigravity-jev-verdict.py` | Antigravity gate: reads the transcript on `PreInvocation`, injects one verdict line |
 | `hooks/antigravity-jev-route.py` | Antigravity skill hint (opt-in, `"enabled": false`): one roster line per session |
 | `hooks/pretool-gate.py` | pre-tool permission gate for Claude Code / Codex / Antigravity: belts → one jev request → ask/deny, audit by default |
+| `hooks/stop-gate.py` | stop gate: run facts from the transcript, then one jev `noul`; blocks only on a likely *and* decisive answer |
+| `hooks/lib/transcript.py` | normalizes Claude Code and Antigravity transcripts into prompts, tool calls, results and closing text |
 | `hooks/lib/gates.py` | the pure half: question wording, thresholds, belts, `decide_command`, `decide_completion` |
 | `hooks/gate-policy.json` | one policy for every gate and host: mode, thresholds, state cap, cache scope and pruning, allow mode |
 | `hooks.json` | Antigravity plugin wiring for that gate (root — Antigravity reads no other path) |
@@ -718,6 +720,56 @@ one-shot grants are still excluded, because they are never recorded at all. **`"
 only a grant the harness actually named counts, so Codex and Antigravity keep asking after
 every run. `cache.honorApprovals: false` turns the mechanism off everywhere, and in
 `bypassPermissions` nothing is recorded regardless.
+
+## The stop gate: does the turn match what the closing message says?
+
+`hooks/stop-gate.py` asks one `noul` — *does this closing message claim completion the run
+facts do not support?* — and it establishes the run facts locally first, because the
+wording alone is worthless: a published calibration over 1 500 real stops put the
+message-only rule at AUROC 0.50 (a coin flip), and 0.976 once the turn's run facts were in
+front of the model.
+
+Four checks, cheapest first, and only the last one costs a request:
+
+| order | check | outcome |
+|---|---|---|
+| 1 | no edits this turn | allow the stop |
+| 2 | a check **passed after the last edit** | allow — verified |
+| 3 | the message claims nothing (`DONE_HINT`) | allow — not a completion claim |
+| 4 | otherwise | one jev `noul`; block only if `noul ≥ 0.70` **and** confidence `≥ 0.70` |
+
+A check is judged by its **output**, not by exit status: both hosts record a failing suite
+with no error field, so `check_outcome()` looks for the runner's own summary line and lets
+failure win over success (`"40 passed, 3 failed"` is a failure).
+
+Guards, because a completion gate that loops is worse than one that misses: `stop_hook_active`
+(Claude Code), `terminationReason: error|max_steps_exceeded` and `fullyIdle: false`
+(Antigravity), a 60 s cooldown, and at most 3 blocks per session.
+
+Two live `agy` sessions, audit mode:
+
+```json
+{"gate":"stop","host":"antigravity","run":{"file_changes":1,"checks":[]},
+ "answers":{"unverified":{"noul":0.4}},"decision":null,
+ "reason":"claim looks supported (40% unverified, 20% confidence)."}
+
+{"gate":"stop","host":"antigravity","run":{"file_changes":1,"checks":[]},
+ "answers":{"unverified":{"noul":0.93}},"decision":"block",
+ "reason":"this message claims a completion the run facts do not show (93% likely, 86% confidence) …"}
+```
+
+The second session created a file, ran nothing, and closed with *"Done — all tests pass and
+the build is green."* The confidence there is derived (`|2p−1|`), because the relay sent no
+`confidence` field — which is why `confidence_of()` derives it instead of trusting it.
+
+Enforcement speaks `{"decision":"block","reason":…}` on Claude Code / Codex and
+`{"decision":"continue","reason":…}` on Antigravity, where the reason arrives as a system
+message and the agent gets one more step to run the check it claimed.
+
+> **Hermes has no equivalent.** `agent_loop_stopped` is an observer — its return value is
+> ignored — so this gate degrades to advice there (`pre_llm_call` on the next turn), not to
+> a block. The capability table in `docs/harness-adapters.md` says so per host instead of
+> claiming parity.
 
 ### Antigravity
 
