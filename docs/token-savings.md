@@ -75,6 +75,38 @@ sessions make more calls).
   inject profile secrets into MCP subprocesses — see
   [`mcp/jev/env.example`](https://github.com/ronail/jev-cost-guard/blob/main/mcp/jev/env.example)); nothing is committed.
 
+## Per-turn analytics (opt-in, `jev-analytics`)
+
+Every jev tool call appends one measured row (`body_chars`, jev's own `usage`,
+the verdict size) and its result ends with a compact `[jev in=… out=…]` suffix, so
+a tool result is self-describing in any harness. Asking for a report is the only
+opt-in; the turn then ends with ~45 tokens:
+
+```
+jev analytics · 1 call (est.)
+  screened  7,120 chars ≈ 1,780 tok → main model read 0
+  jev       in 2,038 / out 24 tok (jev cost unpriced)
+  saved     1,743 tok ≈ $0.00026 @ official DeepSeek deepseek-flash $0.15/$0.6 per M
+  assumption: those bodies would otherwise have been read by the main model
+```
+
+### How `report` finds the ledger
+
+The server and the report script are separate processes with different
+environments: only the server sees `JEV_CALL_LOG` / `PLUGIN_DATA` from the host's
+MCP config. Resolving the path independently made the server write one file and
+`report` read another, so every report came back empty — with a tool result that
+looked perfectly healthy. The server now publishes its resolved path to
+`<state>/jev-cost-guard/ledger-path` on every append, and the script follows it.
+An explicit `JEV_CALL_LOG` still wins.
+
+Three limits are deliberate, because a cost report that flatters itself is worse
+than none: `saved` is `body_tokens − kept_tokens` and the counterfactual is
+stated as an assumption; bodies under ~1.5k tokens are a net loss and are printed
+as one; and `$` uses **official DeepSeek list prices only** — the same model id
+ranges from `$0.02` to `$0.67` per 1M across resellers, so anything else prints
+`$ n/a` instead of a guess.
+
 ## When this differs
 - **Anthropic (cached) profiles** (`default`): prompt caching makes the stable
   prefix ~0.1× on repeated calls, so relative saving is smaller; the fixed-prompt

@@ -2,7 +2,7 @@
   "$schema": "https://antigravity.google/schemas/v1/plugin.json",
   "name": "jev-cost-guard",
   "displayName": "jev cost guard",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Token-economy guard: jev decision-model MCP tools (jev_health, jev_summarize, jev_find, jev_screen) plus the jev-* skills, for Antigravity.",
   "logo": "assets/icon.png",
   "suggestedPrompts": [
