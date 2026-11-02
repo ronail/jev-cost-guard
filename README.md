@@ -107,7 +107,7 @@ and failure modes) are documented in `mcp/jev/env.example` and the server docstr
 | `JEV_FALLBACK_TO_PAID` | `1` | `1` (default) on `jev-1.13-free` exhaustion (HTTP 429/403 with a real key) retry the paid model; `0` fails open; no-key never falls back |
 | `JEV_FALLBACK_MODEL` | `jev-1.13` | paid model retried on free exhaustion (same key/endpoint/UA; bills your opencode account) |
 | `JEV_DEBUG` | `0` | optional — `verbose` = print masked provider/key diagnostics (**not** `1`: MCP env values must be strings) |
-| `JEV_ANALYTICS_DIR` | `$PLUGIN_DATA/analytics` → `~/.local/state/jev-cost-guard` | ledger dir; both `jev_analytics.py` and the MCP server resolve it identically |
+| `JEV_ANALYTICS_DIR` | `$PLUGIN_DATA/analytics` → `~/.local/state/jev-cost-guard` | ledger dir; resolved the same way on both sides, and the server publishes its resolved path so `report` finds the file from another process |
 | `JEV_CALL_LOG` | `$JEV_ANALYTICS_DIR/calls.jsonl` | optional — where analytics rows are appended (one JSON line per jev tool call) |
 | `OPENCODE_ZEN_API_KEY` | env (Hermes: profile `.env`) | required for the real-key path |
 

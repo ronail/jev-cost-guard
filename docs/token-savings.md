@@ -90,6 +90,16 @@ jev analytics · 1 call (est.)
   assumption: those bodies would otherwise have been read by the main model
 ```
 
+### How `report` finds the ledger
+
+The server and the report script are separate processes with different
+environments: only the server sees `JEV_CALL_LOG` / `PLUGIN_DATA` from the host's
+MCP config. Resolving the path independently made the server write one file and
+`report` read another, so every report came back empty — with a tool result that
+looked perfectly healthy. The server now publishes its resolved path to
+`<state>/jev-cost-guard/ledger-path` on every append, and the script follows it.
+An explicit `JEV_CALL_LOG` still wins.
+
 Three limits are deliberate, because a cost report that flatters itself is worse
 than none: `saved` is `body_tokens − kept_tokens` and the counterfactual is
 stated as an assumption; bodies under ~1.5k tokens are a net loss and are printed
