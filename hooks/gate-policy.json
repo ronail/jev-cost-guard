@@ -1,0 +1,22 @@
+{
+  "_comment": "Policy for hooks/pretool-gate.py and hooks/stop-gate.py. Env vars override: JEV_GATE_MODE, JEV_GATE_THRESHOLD_CONFIDENCE, JEV_GATE_THRESHOLD_DESTRUCTIVE, JEV_GATE_THRESHOLD_UNVERIFIED, JEV_GATE_MAX_STATE_CHARS, JEV_GATE_STATE_DIR, JEV_GATE_POLICY.",
+  "mode": "audit",
+  "thresholds": {
+    "confidence": 0.7,
+    "destructive": 0.5,
+    "unverified": 0.7
+  },
+  "maxStateChars": 12000,
+  "cache": {
+    "scope": "session",
+    "pruneAfterMs": 86400000,
+    "maxEntries": 2000,
+    "honorApprovals": true,
+    "approvalScope": "session"
+  },
+  "allowMode": "passthrough",
+  "stop": {
+    "cooldownMs": 60000,
+    "maxBlocksPerSession": 3
+  }
+}
