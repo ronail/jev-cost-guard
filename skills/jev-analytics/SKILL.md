@@ -77,6 +77,11 @@ python3 "${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-.}}/scripts/jev_analytics.py" \
   report --model <main-model-id>
 ```
 
+Some hosts set neither variable, and the expression then falls back to `.`. If the
+path does not exist, find the plugin root first — the directory containing
+`mcp/jev/server.py` — and run `<root>/scripts/jev_analytics.py` from there. Do not
+substitute your own arithmetic for a failed run.
+
 It prints (about 45 tokens):
 
 ```
