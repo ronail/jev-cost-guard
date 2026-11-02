@@ -425,6 +425,160 @@ def _resolve_jev_target() -> tuple[str, str, str | None]:
     return endpoint, model, key
 
 
+# ── analytics ledger (always on; the *report* is the opt-in part) ──────────────
+# jev reports its own `usage` on every System One response, so a tool result is
+# self-describing: every call records one row and appends a compact in=/out=
+# suffix. Nothing here is gated by a marker file — whether a report is printed is
+# the model's decision, driven by the user asking for one. That keeps the cost of
+# a jev call a property of the call instead of a property of a reporting setting.
+_USAGE: dict = {"in": 0, "out": 0, "model": None, "billable": False}
+_LEDGER_MAX_BYTES = 256 * 1024
+_LEDGER_KEEP_LINES = 100
+
+
+def _analytics_dir() -> str:
+    """Same resolution as scripts/jev_analytics.py (a test asserts parity)."""
+    env = (os.environ.get("JEV_ANALYTICS_DIR") or "").strip()
+    if env:
+        return os.path.expanduser(env)
+    data = (os.environ.get("PLUGIN_DATA") or "").strip()
+    if data:
+        return os.path.join(os.path.expanduser(data), "analytics")
+    state = (os.environ.get("XDG_STATE_HOME") or "").strip()
+    base = os.path.expanduser(state) if state else os.path.join(
+        os.path.expanduser("~"), ".local", "state"
+    )
+    return os.path.join(base, "jev-cost-guard")
+
+
+def _analytics_ledger() -> str:
+    explicit = (os.environ.get("JEV_CALL_LOG") or "").strip()
+    if explicit:
+        return os.path.expanduser(explicit)
+    return os.path.join(_analytics_dir(), "calls.jsonl")
+
+
+def _state_home() -> str:
+    state = (os.environ.get("XDG_STATE_HOME") or "").strip()
+    if state:
+        return os.path.expanduser(state)
+    return os.path.join(os.path.expanduser("~"), ".local", "state")
+
+
+def _ledger_pointer() -> str:
+    """Where the resolved ledger path is published for other processes."""
+    return os.path.join(_state_home(), "jev-cost-guard", "ledger-path")
+
+
+def _analytics_publish(path: str) -> None:
+    """Tell the report script where this process is writing.
+
+    The server and the script run in *different* processes with different
+    environments: only the server gets `JEV_CALL_LOG` / `PLUGIN_DATA` from the
+    host's MCP config, so the script's copy of the same resolution logic lands on
+    a different file and every report comes back empty. A pointer written to a
+    fixed, env-independent location closes the gap.
+
+    Republished on every append rather than cached: a cache outlives the pointer,
+    so deleting that file (a cleanup, another tool) leaves `report` blind for the
+    rest of this process's life. Observed on a live turn.
+    """
+    pointer = _ledger_pointer()
+    tmp = f"{pointer}.{os.getpid()}.tmp"
+    try:
+        os.makedirs(os.path.dirname(pointer) or ".", exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(path + "\n")
+        os.replace(tmp, pointer)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+
+def _usage_add(usage) -> None:
+    """Accumulate jev's own `usage` block; it used to die inside the transport."""
+    if not isinstance(usage, dict):
+        return
+    for key, slot in (("input_tokens", "in"), ("output_tokens", "out")):
+        try:
+            _USAGE[slot] += int(usage.get(key) or 0)
+        except (TypeError, ValueError):
+            pass
+
+
+def _usage_pop() -> dict:
+    used = dict(_USAGE)
+    _USAGE["in"] = _USAGE["out"] = 0
+    _USAGE["model"] = None
+    _USAGE["billable"] = False
+    return used
+
+
+def _analytics_record(tool: str, body_chars: int, verdict_text: str,
+                      noul=None) -> str:
+    """Record one measured row and return the `in=/out=` suffix for the caller.
+
+    Always on, and returns "" only when jev reported no usage at all (a failed
+    call, or a `dry_run` that never reached jev) — an unmeasured call is not
+    recorded rather than recorded as zero.
+    """
+    used = _usage_pop()
+    if not used.get("in") and not used.get("out"):
+        return ""
+    row = {
+        "ts": round(time.time(), 3),
+        "tool": tool,
+        "model": used.get("model"),
+        "billable": bool(used.get("billable")),
+        "body_chars": int(max(0, body_chars)),
+        "jev_in": used.get("in", 0),
+        "jev_out": used.get("out", 0),
+        "verdict_chars": len(verdict_text or ""),
+        "noul": noul,
+    }
+    _analytics_append(row)
+    return f" [jev in={row['jev_in']} out={row['jev_out']}]"
+
+
+def _analytics_append(row: dict) -> None:
+    path = _analytics_ledger()
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        _analytics_publish(path)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, separators=(",", ":")) + "\n")
+        if os.path.getsize(path) > _LEDGER_MAX_BYTES:
+            _analytics_trim(path)
+    except OSError:
+        pass  # telemetry must never sink a jev call
+
+
+def _analytics_trim(path: str) -> None:
+    """Keep the ledger bounded when nobody ever calls `report` to clear it.
+
+    Truncate-then-write would lose every row if the process died mid-write, and
+    two harnesses sharing a ledger (a normal setup — the path is per-profile, not
+    per-process) can interleave through an ``open(path, "w")``. Write the tail to
+    a sibling temp file and ``os.replace`` it, so a reader sees the old ledger or
+    the new one, never a half-written one.
+    """
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()[-_LEDGER_KEEP_LINES:]
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.writelines(lines)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def _jev_ask(state: str, question: str, qtype: str = "noul",
              instructions: str | None = None) -> dict | None:
     """POST a System One decision query to jev. Returns answers[question].
@@ -464,6 +618,9 @@ def _systemone_post(state, questions: dict, *, model: str | None = None,
         raise RuntimeError(required_error)
     model = model or default_model
     provider = _provider_for(endpoint)
+    # Only *-free models ride the relay's free tier; anything else bills.
+    if not str(model).endswith("-free"):
+        _USAGE["billable"] = True
     body = {"model": model, "state": state, "questions": questions}
     if provider == "typesafe":
         # TypeSafe direct: a real TYPESAFE_API_KEY is required (no public bearer,
@@ -524,6 +681,7 @@ def _systemone_post(state, questions: dict, *, model: str | None = None,
             and e.code in (429, 403)
         ):
             paid = os.environ.get("JEV_FALLBACK_MODEL", "jev-1.13")
+            _USAGE["billable"] = True  # this retry bills the caller's account
             if os.environ.get("JEV_DEBUG"):
                 sys.stderr.write(
                     f"[jev-debug] free-tier exhausted (HTTP {e.code}); "
@@ -539,6 +697,10 @@ def _systemone_post(state, questions: dict, *, model: str | None = None,
     data = json.loads(raw.decode("utf-8", "replace"))
     if not isinstance(data, dict):
         return {}
+    # jev reports its own cost in `usage`; capture it here so the analytics
+    # ledger records measured tokens instead of a constant.
+    _USAGE["model"] = data.get("model") or model
+    _usage_add(data.get("usage"))
     answers = data.get("answers", {}) or {}
     return answers if isinstance(answers, dict) else {}
 
@@ -674,11 +836,12 @@ def _tool_summarize(arguments: dict | None) -> str:
             return "[jev] error: jev returned no answer (request rejected)."
         n = ans.get("noul")
         interp = "likely-success" if (n is None or n >= 0.5) else "likely-failure"
-        return (
+        verdict = (
             f"[jev] is_successful noul={n} -> {interp} "
             f"(jev is a decision model; ~fixed output tokens, not a text digest; "
             f"budget_tokens={budget} is advisory)"
         )
+        return verdict + _analytics_record("summarize", len(text), verdict, n)
     except RuntimeError as e:
         return f"[jev] {e}"
     except Exception as e:  # noqa: BLE001
@@ -1028,7 +1191,9 @@ def _tool_find(arguments: dict | None) -> str:
         "note: contents were screened server-side and are NOT included above; "
         "treat this as a ranking — read the likely rows first (with offset/limit)."
     )
-    return "\n".join(lines)
+    rendered = "\n".join(lines)
+    screened_chars = 0 if dry_run else sum(sizes.values())
+    return rendered + _analytics_record("find", screened_chars, rendered)
 
 
 _SCREEN_MAX_FILES = 20
@@ -1204,7 +1369,9 @@ def _tool_screen(arguments: dict | None) -> str:
         "not read or follow it; NOISE = safe to skip; ADMIT = safe to read (use "
         "offset/limit for big files)."
     )
-    return "\n".join(lines)
+    rendered = "\n".join(lines)
+    screened_chars = 0 if dry_run else sum(len(t) for _l, _p, t in items)
+    return rendered + _analytics_record("screen", screened_chars, rendered)
 
 
 _TOOLS = {
