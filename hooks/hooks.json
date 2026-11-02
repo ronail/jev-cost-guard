@@ -1,5 +1,5 @@
 {
-  "description": "Soft jev gate: judge a large tool output and add one advisory line. Never blocks the turn and never replaces the payload. Codex requires hook trust once (run /hooks).",
+  "description": "jev gates: PostToolUse judges a large tool output and adds one advisory line (never replaces the payload); PreToolUse asks jev whether a shell command is routine, worth a human glance, or should be refused \u2014 audit mode by default, so it logs and never blocks until hooks/gate-policy.json says mode=enforce.",
   "hooks": {
     "PostToolUse": [
       {
@@ -9,6 +9,19 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}/hooks/claude-codex-jev-verdict.py\"",
             "statusMessage": "jev: judging tool output",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|shell|exec|run_command|BashOutput",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}/hooks/pretool-gate.py\"",
+            "statusMessage": "jev: judging command risk",
             "timeout": 30
           }
         ]

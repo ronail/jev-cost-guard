@@ -46,6 +46,12 @@ SERVER = os.environ.get("JEV_SERVER_PATH") or os.path.join(
 THRESHOLD = int(os.environ.get("JEV_VERDICT_THRESHOLD_CHARS", "4000"))
 TIMEOUT = float(os.environ.get("JEV_VERDICT_TIMEOUT_S", "20"))
 
+sys.path.insert(0, HERE)
+try:  # the shared decision core and the execution ledger
+    from lib import approvals, gates
+except Exception:  # a broken import must not break a hook
+    approvals = gates = None  # type: ignore[assignment]
+
 # Never gate jev's own tools: their output is the decision the model is reading,
 # and a second jev call per result would cost more than it saves.
 _JEV_PREFIXES = ("jev_", "mcp__jev__", "mcp__plugin_jev", "codex_jev")
@@ -77,6 +83,52 @@ def _flatten(value) -> str:
             return "\n".join(parts)
         return "".join(_flatten(v) for v in value.values())
     return str(value)
+
+
+def _tool_of(event: dict) -> str:
+    """Tool name from either envelope: Claude Code/Codex, or Antigravity's toolCall."""
+    return str(event.get("tool_name") or "").strip() or str((event.get("toolCall") or {}).get("name") or "")
+
+
+def _host_of(event: dict) -> str:
+    if "toolCall" in event or "conversationId" in event:
+        return "antigravity"
+    return os.environ.get("JEV_GATE_HOST", "claude")
+
+
+def _record_execution(event: dict, tool: str) -> None:
+    """Note that this exact command ran, so the pre-tool gate need not ask again.
+
+    The hook cannot see the human's answer; it can see that the tool ran afterwards,
+    which is the same fact from the agent's side. Both key shapes are written because
+    the pre-tool gate picks one from `cache.scope`, and a stale note must not depend on
+    an unrelated setting. Bookkeeping only — every failure is swallowed.
+    """
+    if approvals is None or gates is None:
+        return
+    try:
+        args = event.get("tool_input")
+        if not isinstance(args, dict):
+            args = (event.get("toolCall") or {}).get("args") or {}   # Antigravity envelope
+        if not gates.is_shell_tool(tool, args):
+            return
+        command = gates.extract_command(args)
+        if not command:
+            return
+        host = _host_of(event)
+        session = str(event.get("session_id") or event.get("conversationId") or "")
+        cwd = str(event.get("cwd") or args.get("cwd") or "")
+        mode = str(event.get("permission_mode") or "default")
+        grant = approvals.grant_scope(approvals.last_permission(str(event.get("transcript_path") or "")))
+        if grant == "once":
+            return                     # explicitly one-shot: never remembered
+        # None means the host records no grant scope (Codex, Antigravity) — the ledger keeps
+        # the fact, and cache.approvalScope decides whether it may silence the gate.
+        for key in (gates.cache_key(host, tool, command, cwd, session),
+                    gates.cache_key(host, tool, command, cwd, "")):
+            approvals.record_run(key, mode)
+    except Exception:
+        return
 
 
 def _extract_output(event: dict) -> str:
@@ -117,9 +169,10 @@ def main() -> None:
         sys.exit(0)
     if not isinstance(event, dict):
         sys.exit(0)
-    tool = str(event.get("tool_name") or "")
+    tool = _tool_of(event)
     if not tool or _is_jev_tool(tool):
         sys.exit(0)
+    _record_execution(event, tool)   # before the size check: an approval is not a payload
     output = _extract_output(event)
     n = len(output)
     if n < THRESHOLD:

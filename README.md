@@ -236,6 +236,9 @@ faster it pays off. No other model is involved.
 | `hooks/claude-codex-jev-verdict.py` | standalone soft-gate hook for Claude Code / Codex |
 | `hooks/antigravity-jev-verdict.py` | Antigravity gate: reads the transcript on `PreInvocation`, injects one verdict line |
 | `hooks/antigravity-jev-route.py` | Antigravity skill hint (opt-in, `"enabled": false`): one roster line per session |
+| `hooks/pretool-gate.py` | pre-tool permission gate for Claude Code / Codex / Antigravity: belts → one jev request → ask/deny, audit by default |
+| `hooks/lib/gates.py` | the pure half: question wording, thresholds, belts, `decide_command`, `decide_completion` |
+| `hooks/gate-policy.json` | one policy for every gate and host: mode, thresholds, state cap, cache scope and pruning, allow mode |
 | `hooks.json` | Antigravity plugin wiring for that gate (root — Antigravity reads no other path) |
 | `scripts/install-antigravity.py` | no-plugin workspace install: `.agents/mcp_config.json` + `.agents/hooks.json`, merged |
 | `hooks/hooks.json` | Claude Code plugin wiring for that gate (PostToolUse) |
@@ -627,6 +630,94 @@ Codex surfaces jev tools natively. For the **auto-gate**, the plugin already wir
 `hooks/hooks.json`; a manual install can point a tool-result hook at
 `hooks/claude-codex-jev-verdict.py` with the same env. Same soft-gate semantics: verdict
 logged, exits 0.
+
+## The pre-tool gate: a permission judgement, not a verdict
+
+`PostToolUse` answers "was that output good?" after the bytes are already paid for.
+`PreToolUse` answers a different question — **should this command run at all** — and it
+can stop it. `hooks/pretool-gate.py` runs there on Claude Code, Codex and Antigravity, in
+each host's own vocabulary, and it is **audit-only by default**.
+
+Three tiers, cheapest first:
+
+| tier | what it is | cost |
+|---|---|---|
+| 0 | deterministic belts (`RISK_BELTS`: recursive delete, history rewrite, `DROP TABLE`, `dd of=`, global install, publish/deploy, remote copy, network upload, pipe-to-shell, `sudo`, container/system wipe, credential read) | free — a routine command (`npm test`, `git status`, `rg`) never leaves this tier |
+| 1 | one jev request, two questions: a `choice` risk call (allow / ask / deny) + a `noul` "destroys state outside the working tree?" cross-check | ~1 s, one request, only for commands tier 0 flagged |
+| 2 | session-scoped cache (`session` + `cwd` in the key, 24 h pruning) + a 12 000-char state cap | an `ask`/`deny` is not re-asked in the same place; an `allow` is judged again every time, because a command string says nothing about what it will now delete — and an oversized command is answered locally, since judging a head and a tail is not judging the command |
+
+Two invariants, both taken from published implementations rather than invented here:
+
+- **Jev may only narrow.** A confident `allow` returns *nothing*, so the harness's own
+  permission flow still applies. `allowMode: "passthrough"` is the default and
+  `"allow"` — which would genuinely grant a permission — is opt-in.
+- **A hard action needs a decisive answer.** Below the confidence bar (0.70) every answer
+  degrades to `ask`; a `noul destructive` of 0.50 or more forces `ask` even when the
+  choice said `allow`.
+
+Audit mode judges for real and writes one line, and never touches the turn:
+
+```json
+{"gate":"pre_tool","host":"claude","tool":"Bash","decision":"ask","source":"jev",
+ "belts":["recursive delete","delete without recycle"],"command_prefix":"rm -rf ./build …",
+ "reason":"worth a human glance (100% confidence, 95% destructive).","mode":"audit",
+ "answers":{"risk":{"choice":"ask","confidence":1.0},"destructive":{"noul":0.95}}}
+```
+
+Flip to enforcement in `hooks/gate-policy.json` (`"mode": "enforce"`), or per shell with
+`JEV_GATE_MODE=enforce`. Enforcement then answers natively:
+
+```text
+Claude Code / Codex   {"hookSpecificOutput":{"hookEventName":"PreToolUse",
+                       "permissionDecision":"ask","permissionDecisionReason":"jev: …"}}
+Antigravity           {"decision":"ask","reason":"jev: …"}
+```
+
+Codex has no `ask` on `PreToolUse`, so set `JEV_GATE_HOST=codex` there: `ask` becomes a
+`systemMessage` (pass through with the concern surfaced) and `deny` stays a denial.
+
+Every failure path is silent and exits 0 — no key, timeout, unreadable server, bad JSON,
+malformed answer — because a permission gate that blocks by accident costs more trust than
+one that misses a case. State lives in `$TMPDIR/jev-gate` (`JEV_GATE_STATE_DIR`):
+`decisions.jsonl` is the audit trail, `cache.json` the per-session memory.
+
+**An approval is honoured for exactly the scope the human granted.** The hook payload does
+not carry the answer to its own `ask`, but the transcript does: Claude Code records one
+`permissionDecision` object per tool call, and it names the grant — measured across 5 000+
+rows of real transcripts on this machine:
+
+| recorded in the transcript | meaning | reused? |
+|---|---|---|
+| `{"source":"user_temporary","grantScope":"once"}` | yes, this once | **no** — the repeat asks again |
+| `{"source":"user_temporary"}` | yes, and don't ask again this session | **yes** — scoped to `session` + `cwd` + command |
+| `{"source":"user_permanent","ruleSource":"localSettings"}` | always allow (persisted) | **yes** |
+| `{"source":"config","reasonType":"classifier"}` | a rule or classifier said yes; nobody was asked | **no** — no human, no grant |
+| `{"decision":"reject", …}` | no | never — a refusal cannot be laundered |
+
+So `hooks/lib/approvals.py` reads the transcript tail after the tool runs, and records a
+grant only for `user_temporary` (without `grantScope: once`) or `user_permanent`, keyed by
+`(session, cwd, command)`. Anything unrecognised — an unreadable transcript, a new source
+name, a hook-issued approval — records nothing and the gate keeps asking, which is the
+failure mode that costs a prompt instead of a permission.
+
+`grantScope` is an internal field, not documented API: if a future release renames it the
+gate degrades to always-asking rather than to always-allowing.
+
+**Which harnesses can tell the difference** — measured, not assumed:
+
+| host | pre-tool `ask` | grant scope readable | behaviour |
+|---|---|---|---|
+| **Claude Code** | `PreToolUse` | **yes** — `permissionDecision.source` / `grantScope` | one-shot is never remembered; session/always is honoured |
+| **Codex** | `PreToolUse` | no — session rollouts carry `approval_policy`, not a per-call grant | the run is recorded without a scope (`PostToolUse`, verified live) |
+| **Antigravity** | `PreToolUse` | no — its transcript has no permission rows | recorded without a scope (`jev-post-tool`, verified live) |
+| **Hermes** | none — `pre_tool_call` can block or approve, it cannot *ask* | n/a | nothing to remember; its gates stay advisory |
+
+`cache.approvalScope` decides what a scope-less record means. **`"session"`** (shipped):
+any recorded run counts, so every host with an `ask` gate behaves the same — on Claude Code
+one-shot grants are still excluded, because they are never recorded at all. **`"host"`**:
+only a grant the harness actually named counts, so Codex and Antigravity keep asking after
+every run. `cache.honorApprovals: false` turns the mechanism off everywhere, and in
+`bypassPermissions` nothing is recorded regardless.
 
 ### Antigravity
 
