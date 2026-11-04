@@ -39,6 +39,8 @@ prerequisite: if your harness is not listed, use its nearest equivalent.
 | **approval memory** | n/a — `pre_tool_call` cannot ask, so there is no grant to remember | transcript `permissionDecision.source`/`grantScope`: one-shot excluded, session/always honoured | no per-call grant in the rollout — run recorded without scope, honoured under `approvalScope: session` (verified live) | no per-call grant in the transcript — same as Codex, wired via `jev-post-tool` (verified live) |
 | **completion gate** | **advisory only** — `agent_loop_stopped` ignores return values, so advice goes out on the next `pre_llm_call` | `Stop` → `decision: "block"` + reason, `stop_hook_active` prevents chains | `Stop` → block | `Stop` → `decision: "continue"`, reason injected as a system message |
 
+> **Codex transcripts are not Claude transcripts.** A Codex rollout is `response_item` / `event_msg` rows: tool calls arrive as `custom_tool_call` whose `input` is JavaScript (`tools.exec_command({cmd:"…"})`, `tools.apply_patch(…)`), and completed work also shows up as an `item_completed` / `FileChange` item. `hooks/lib/transcript.py` parses that shape too — without it the stop gate saw zero edits on Codex and free-allowed every stop.
+
 `hermes prompt-size --json` is authoritative **only when you are Hermes**. Every
 other harness has no native prompt-size command, so the portable estimator is the
 number you quote — labelled as an estimate.
