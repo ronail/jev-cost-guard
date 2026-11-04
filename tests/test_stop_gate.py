@@ -380,3 +380,54 @@ def test_turn_slice_is_the_baseline_the_gate_saves_against():
 def test_turn_slice_without_a_prompt_takes_everything():
     task, turn = transcript.turn_slice([{"kind": "assistant_text", "text": "hi"}])
     assert task == "" and len(turn) == 1
+
+
+# ── Codex rollouts: a different shape entirely ─────────────────────────────
+
+CODEX_ROWS = [
+    {"type": "response_item", "payload": {"type": "message", "role": "developer",
+                                          "content": [{"type": "input_text", "text": "you are codex"}]}},
+    {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+        "type": "UserMessage", "content": [{"type": "text", "text": "add the feature"}]}}},
+    {"type": "response_item", "payload": {"type": "custom_tool_call", "name": "exec",
+                                          "input": 'const r = await tools.exec_command({cmd:"pytest -q",workdir:"/w"}); text(r.output);\n'}},
+    {"type": "response_item", "payload": {"type": "custom_tool_call_output", "output": [
+        {"type": "input_text", "text": "40 passed"}]}},
+    {"type": "response_item", "payload": {"type": "custom_tool_call", "name": "exec",
+                                          "input": 'text(await tools.apply_patch("*** Begin Patch\\n*** Add File: a.py\\n+x\\n*** End Patch"));\n'}},
+    {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+        "type": "FileChange", "changes": {"/w/a.py": {"type": "add", "content": "x"}},
+        "stdout": "Success. Updated the following files:\nA a.py\n"}}},
+    {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+        "type": "AgentMessage", "content": [{"type": "Text", "text": "Done, all tests pass."}],
+        "phase": "final_answer"}}},
+]
+
+
+def test_codex_rollout_is_normalized(tmp_path):
+    """Codex writes tool calls as JS custom_tool_call rows, not Claude's tool_use blocks."""
+    path = tmp_path / "rollout.jsonl"
+    path.write_text("\n".join(json.dumps(row) for row in CODEX_ROWS) + "\n")
+    events = transcript.read_events(str(path))
+    kinds = sorted({e["kind"] for e in events})
+    assert kinds == ["assistant_text", "prompt", "tool_call", "tool_result"]
+    assert all(e["kind"] != "prompt" or "add the feature" in e["text"] for e in events if e["kind"] == "prompt")
+    assert not any("you are codex" in str(e.get("text")) for e in events)   # developer rows skipped
+
+
+def test_codex_turn_facts_see_the_edit_and_the_claim(tmp_path):
+    """Without this the stop gate saw zero edits on Codex and free-allowed every stop."""
+    path = tmp_path / "rollout.jsonl"
+    path.write_text("\n".join(json.dumps(row) for row in CODEX_ROWS) + "\n")
+    facts = transcript.turn_facts(transcript.read_events(str(path)))
+    assert facts["task"] == "add the feature"
+    assert facts["file_changes"] >= 1
+    assert facts["claims"] is True
+    assert facts["final_message"].startswith("Done")
+    assert any(c["outcome"] == "passed" for c in facts["checks"])
+
+
+def test_codex_command_is_pulled_out_of_the_js_source():
+    assert transcript._codex_command('tools.exec_command({cmd:"git status",workdir:"/w"})') == "git status"
+    assert transcript._codex_command("tools.exec_command({cmd:'rm -rf ./x'})") == "rm -rf ./x"
+    assert transcript._codex_command("tools.apply_patch('*** Begin Patch')") == ""

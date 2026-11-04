@@ -589,6 +589,22 @@ statusMessage = "jev: judging tool output"
 timeout = 30
 ```
 
+**The plugin does not ship Codex hooks.** `hooks/hooks.json` inside the plugin is a Claude
+Code manifest; Codex reads only its own config layer. Reinstalling the plugin copies scripts
+into `~/.codex/plugins/cache/...` and the dashboard keeps showing however many events
+`~/.codex/hooks.json` already declared — which is why a fresh install can still list exactly
+one hook. Declare all three gates once:
+
+```sh
+python3 scripts/install-codex-hooks.py            # merges into ~/.codex/hooks.json
+python3 scripts/install-codex-hooks.py --dry-run  # show the file it would write
+```
+
+That writes `PreToolUse` (`pretool-gate.py`, `env JEV_GATE_HOST=codex`), `PostToolUse`
+(`claude-codex-jev-verdict.py`) and `Stop` (`stop-gate.py`), preserving any hooks already
+there and repointing a stale checkout path instead of duplicating it. The host hint matters:
+Codex has no `ask` on `PreToolUse`, so the gate turns `ask` into a `systemMessage`.
+
 **Three things are required for it to run:**
 
 1. **Trust.** Installing or enabling a plugin does not trust its hooks, and a config-layer hook needs
