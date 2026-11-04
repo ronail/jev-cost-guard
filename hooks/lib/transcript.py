@@ -18,6 +18,7 @@ question does not need, and not sending it is cheaper and leaks less.
 from __future__ import annotations
 
 import json
+import re
 import os
 
 from . import gates
@@ -114,12 +115,106 @@ def _antigravity_events(row: dict) -> list[dict]:
     return events
 
 
+CODEX_CMD = re.compile(r"""\bcmd\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')""")
+
+
+def _codex_command(source: str) -> str:
+    """The shell command out of Codex's JS tool source: tools.exec_command({cmd:"…"})."""
+    match = CODEX_CMD.search(source or "")
+    if not match:
+        return ""
+    literal = match.group(1)
+    if literal.startswith('"'):
+        try:
+            return json.loads(literal)
+        except Exception:
+            return literal.strip('"')
+    return literal.strip("'")
+
+
+def _codex_events(row: dict) -> list[dict]:
+    """Normalize a Codex rollout row (`response_item` / `event_msg` + payload).
+
+    Codex's session file is not a Claude Code transcript: the model's tool calls are
+    `custom_tool_call` rows whose `input` is JavaScript that calls `tools.exec_command`
+    or `tools.apply_patch`, and completed work also shows up as an `item_completed`
+    FileChange. Both shapes are read here so the stop gate can see what a Codex turn
+    actually changed — without this it saw zero edits and free-allowed every stop.
+    """
+    rtype = str(row.get("type") or "")
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    ptype = str(payload.get("type") or "")
+
+    if rtype == "event_msg" and ptype == "item_completed":
+        item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
+        itype = str(item.get("type") or "")
+        if itype == "UserMessage":
+            return [{"kind": "prompt", "text": _flatten(item.get("content"))}]
+        if itype == "AgentMessage":
+            return [{"kind": "assistant_text", "text": _flatten(item.get("content"))}]
+        if itype == "FileChange":
+            paths = list((item.get("changes") or {}).keys())
+            return [{"kind": "tool_call", "name": "apply_patch", "args": {"paths": paths}}]
+        return []
+
+    if rtype != "response_item":
+        return []
+
+    if ptype == "message":
+        role = str(payload.get("role") or "")
+        text = _flatten(payload.get("content"))
+        if not text:
+            return []
+        if role == "user":
+            return [{"kind": "prompt", "text": text}]
+        if role == "assistant":
+            return [{"kind": "assistant_text", "text": text}]
+        return []                      # developer/system instructions are not turns
+
+    if ptype == "custom_tool_call":
+        source = str(payload.get("input") or "")
+        events: list[dict] = []
+        command = _codex_command(source)
+        if command:
+            events.append({"kind": "tool_call", "name": str(payload.get("name") or "exec"),
+                           "args": {"command": command}})
+        if "apply_patch(" in source:
+            # Counted alongside the FileChange item below, so one real edit can appear as
+            # two mutations. Only the zero/non-zero answer is used, and the second signal is
+            # kept because a Codex build without FileChange items would otherwise look
+            # like a turn that changed nothing.
+            events.append({"kind": "tool_call", "name": "apply_patch", "args": {}})
+        return events
+
+    if ptype == "custom_tool_call_output":
+        text = _flatten(payload.get("output"))
+        return [{"kind": "tool_result", "output": text}] if text else []
+
+    if ptype == "function_call":
+        raw = payload.get("arguments")
+        args = raw if isinstance(raw, dict) else {}
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+                args = parsed if isinstance(parsed, dict) else {"command": raw}
+            except Exception:
+                args = {"command": raw}
+        return [{"kind": "tool_call", "name": str(payload.get("name") or ""), "args": args}]
+
+    if ptype == "function_call_output":
+        text = _flatten(payload.get("output"))
+        return [{"kind": "tool_result", "output": text}] if text else []
+
+    return []
+
+
 def read_events(path: str) -> list[dict]:
     """Normalized events for the whole transcript, in order."""
     events: list[dict] = []
     for row in read_rows(path):
         events.extend(_claude_events(row))
         events.extend(_antigravity_events(row))
+        events.extend(_codex_events(row))
     return events
 
 
