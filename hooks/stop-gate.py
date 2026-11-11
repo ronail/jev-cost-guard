@@ -36,6 +36,10 @@ REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
 from lib import gates, transcript  # noqa: E402  (hooks/ is on sys.path above)
+try:
+    from lib import langsmith_tracer
+except Exception:
+    langsmith_tracer = None
 
 SERVER = os.environ.get("JEV_SERVER_PATH") or os.path.join(
     REPO_ROOT, "mcp", "jev", "server.py"
@@ -166,12 +170,14 @@ def main() -> None:
 
     host = "antigravity" if "terminationReason" in event or "transcriptPath" in event else \
         os.environ.get("JEV_GATE_HOST", "claude")
+    is_idle = True
     if host == "antigravity":
         # A crashed or truncated run is not a completion claim, and a session that is
         # not idle still has work in flight.
         if str(event.get("terminationReason") or "").lower() in ("error", "max_steps_exceeded"):
             skip(f"terminationReason={event.get('terminationReason')}")
         if event.get("fullyIdle") is False:
+            is_idle = False
             skip("session is not idle")
     elif event.get("stop_hook_active"):
         skip("stop_hook_active: a block already happened")  # never chain them
@@ -182,52 +188,63 @@ def main() -> None:
     if not facts["final_message"]:
         fallback = event.get("last_assistant_message")
         facts["final_message"] = str(fallback or "")
-    if not facts["claims"]:
-        skip("closing message claims no completion")
-    if facts["file_changes"] == 0:
-        skip("no edits this turn")
-    if facts["verified"]:
-        skip("a check passed after the last edit")
 
-    policy = load_policy()
-    stop_policy = policy.get("stop") or {}
-    cooldown = float(stop_policy.get("cooldownMs", 60_000)) / 1000.0
-    max_blocks = int(stop_policy.get("maxBlocksPerSession", 3))
-    guard = read_guard(session)
-    blocks = int(guard.get("blocks") or 0)
-    if blocks >= max_blocks:
-        skip(f"per-session cap reached ({blocks}/{max_blocks})")
-    if time.time() - float(guard.get("last") or 0) < cooldown:
-        skip("cooldown since the last block")
+    tracer = langsmith_tracer.LangSmithTracer(event=event) if langsmith_tracer else None
+    decision: str | None = None
+    try:
+        if not facts["claims"]:
+            skip("closing message claims no completion")
+        if facts["file_changes"] == 0:
+            skip("no edits this turn")
+        if facts["verified"]:
+            skip("a check passed after the last edit")
 
-    state = gates.build_completion_state(facts["task"], facts["final_message"], {
-        "file_changes": facts["file_changes"],
-        "checks_run": [f"{c['command'][:80]} -> {c['outcome']}" for c in facts["checks"]],
-    })
-    answers = ask_jev(state)
-    if answers is None:
-        skip("jev gave no usable answer")  # fail open: an unreachable judge never traps a session
-    decision, reason = gates.decide_completion(answers, policy)
-    audit({
-        "gate": "stop",
-        "ts": round(time.time(), 3),
-        "host": host,
-        "session": session[:64],
-        "decision": decision,
-        "reason": reason,
-        "mode": policy.get("mode", "audit"),
-        "run": {"file_changes": facts["file_changes"],
-                "checks": [f"{c['command'][:60]} -> {c['outcome']}" for c in facts["checks"]]},
-        "answers": answers,
-        "latency_ms": round((time.time() - started) * 1000),
-    })
-    if policy.get("mode", "audit") == "audit":
-        skip(f"audit mode (would be {decision or 'allow'})")
-    if decision != "block":
-        skip(f"answer did not support a block ({reason})")
-    write_guard(session, {"blocks": blocks + 1, "last": time.time()})
-    emit(host, reason)
-    sys.exit(0)
+        policy = load_policy()
+        stop_policy = policy.get("stop") or {}
+        cooldown = float(stop_policy.get("cooldownMs", 60_000)) / 1000.0
+        max_blocks = int(stop_policy.get("maxBlocksPerSession", 3))
+        guard = read_guard(session)
+        blocks = int(guard.get("blocks") or 0)
+        if blocks >= max_blocks:
+            skip(f"per-session cap reached ({blocks}/{max_blocks})")
+        if time.time() - float(guard.get("last") or 0) < cooldown:
+            skip("cooldown since the last block")
+
+        state = gates.build_completion_state(facts["task"], facts["final_message"], {
+            "file_changes": facts["file_changes"],
+            "checks_run": [f"{c['command'][:80]} -> {c['outcome']}" for c in facts["checks"]],
+        })
+        answers = ask_jev(state)
+        if answers is None:
+            skip("jev gave no usable answer")  # fail open: an unreachable judge never traps a session
+        decision, reason = gates.decide_completion(answers, policy)
+        audit({
+            "gate": "stop",
+            "ts": round(time.time(), 3),
+            "host": host,
+            "session": session[:64],
+            "decision": decision,
+            "reason": reason,
+            "mode": policy.get("mode", "audit"),
+            "run": {"file_changes": facts["file_changes"],
+                    "checks": [f"{c['command'][:60]} -> {c['outcome']}" for c in facts["checks"]]},
+            "answers": answers,
+            "latency_ms": round((time.time() - started) * 1000),
+        })
+        if policy.get("mode", "audit") == "audit":
+            skip(f"audit mode (would be {decision or 'allow'})")
+        if decision != "block":
+            skip(f"answer did not support a block ({reason})")
+        write_guard(session, {"blocks": blocks + 1, "last": time.time()})
+        emit(host, reason)
+        sys.exit(0)
+    finally:
+        if tracer and is_idle:
+            tracer.record_stop_and_flush(
+                message=facts.get("final_message", ""),
+                run_facts=facts,
+                decision=decision or "allow",
+            )
 
 
 if __name__ == "__main__":
