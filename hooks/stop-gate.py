@@ -170,12 +170,14 @@ def main() -> None:
 
     host = "antigravity" if "terminationReason" in event or "transcriptPath" in event else \
         os.environ.get("JEV_GATE_HOST", "claude")
+    is_idle = True
     if host == "antigravity":
         # A crashed or truncated run is not a completion claim, and a session that is
         # not idle still has work in flight.
         if str(event.get("terminationReason") or "").lower() in ("error", "max_steps_exceeded"):
             skip(f"terminationReason={event.get('terminationReason')}")
         if event.get("fullyIdle") is False:
+            is_idle = False
             skip("session is not idle")
     elif event.get("stop_hook_active"):
         skip("stop_hook_active: a block already happened")  # never chain them
@@ -237,7 +239,7 @@ def main() -> None:
         emit(host, reason)
         sys.exit(0)
     finally:
-        if tracer:
+        if tracer and is_idle:
             tracer.record_stop_and_flush(
                 message=facts.get("final_message", ""),
                 run_facts=facts,
