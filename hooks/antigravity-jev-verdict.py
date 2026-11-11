@@ -36,6 +36,11 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+try:
+    from lib import langsmith_tracer
+except Exception:
+    langsmith_tracer = None
 REPO_ROOT = os.path.dirname(HERE)
 SERVER = os.environ.get("JEV_SERVER_PATH") or os.path.join(
     REPO_ROOT, "mcp", "jev", "server.py"
@@ -202,6 +207,13 @@ def main() -> None:
     _remember(conversation, step)  # judged either way: never retry a failed call
     if verdict is None:
         sys.exit(0)
+
+    if langsmith_tracer:
+        try:
+            tracer = langsmith_tracer.LangSmithTracer(event=event)
+            tracer.record_posttool(tool_name=tool, tool_input={}, tool_output=output, verdict=verdict)
+        except Exception:
+            pass
 
     n = len(output)
     if verdict.get("noul") is not None:

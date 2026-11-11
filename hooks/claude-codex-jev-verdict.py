@@ -48,9 +48,9 @@ TIMEOUT = float(os.environ.get("JEV_VERDICT_TIMEOUT_S", "20"))
 
 sys.path.insert(0, HERE)
 try:  # the shared decision core and the execution ledger
-    from lib import approvals, gates
+    from lib import approvals, gates, langsmith_tracer
 except Exception:  # a broken import must not break a hook
-    approvals = gates = None  # type: ignore[assignment]
+    approvals = gates = langsmith_tracer = None  # type: ignore[assignment]
 
 # Never gate jev's own tools: their output is the decision the model is reading,
 # and a second jev call per result would cost more than it saves.
@@ -174,6 +174,12 @@ def main() -> None:
         sys.exit(0)
     _record_execution(event, tool)   # before the size check: an approval is not a payload
     output = _extract_output(event)
+    tracer = langsmith_tracer.LangSmithTracer(event=event) if langsmith_tracer else None
+    if tracer:
+        args = event.get("tool_input")
+        if not isinstance(args, dict):
+            args = (event.get("toolCall") or {}).get("args") or {}
+        tracer.record_posttool(tool_name=tool, tool_input=args, tool_output=output, verdict=None)
     n = len(output)
     if n < THRESHOLD:
         sys.exit(0)  # below the gate threshold — nothing worth judging
@@ -195,6 +201,8 @@ def main() -> None:
         sys.exit(0)
     if not v.get("ok"):
         sys.exit(0)
+    if tracer:
+        tracer.record_posttool(tool_name=tool, tool_input=args, tool_output=output, verdict=v)
     verdict = (f"noul={v.get('noul')} -> {v.get('interpretation')}"
                if v.get("noul") is not None
                else f"verdict={raw}")
