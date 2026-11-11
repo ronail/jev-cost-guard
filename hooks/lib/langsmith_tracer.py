@@ -88,6 +88,7 @@ def discover_credentials(
                 if not endpoint:
                     ep = (
                         cfg.get("endpoint")
+                        or cfg.get("api_url")
                         or cfg.get("LANGSMITH_ENDPOINT")
                         or cfg.get("LANGCHAIN_ENDPOINT")
                     )
