@@ -252,18 +252,25 @@ class LangSmithTracer:
             or self.event.get("prompt")
             or self.event.get("lastUserInput")
         )
-        if prompt and isinstance(prompt, str) and prompt.strip():
-            return prompt.strip()
+        if not prompt or not isinstance(prompt, str) or not prompt.strip():
+            transcript_path = self.event.get("transcript_path") or self.event.get("transcriptPath")
+            if transcript_path and os.path.exists(transcript_path):
+                try:
+                    from lib import transcript  # type: ignore
+                    task, _ = transcript.turn_slice(transcript.read_events(transcript_path))
+                    if task and isinstance(task, str) and task.strip():
+                        prompt = task.strip()
+                except Exception:
+                    pass
 
-        transcript_path = self.event.get("transcript_path") or self.event.get("transcriptPath")
-        if transcript_path and os.path.exists(transcript_path):
-            try:
-                from lib import transcript  # type: ignore
-                task, _ = transcript.turn_slice(transcript.read_events(transcript_path))
-                if task and isinstance(task, str) and task.strip():
-                    return task.strip()
-            except Exception:
-                pass
+        if prompt and isinstance(prompt, str) and prompt.strip():
+            text = prompt.strip()
+            if "<USER_REQUEST>" in text:
+                import re
+                m = re.search(r"<USER_REQUEST>\s*(.*?)\s*(?:</USER_REQUEST>|$)", text, re.DOTALL)
+                if m and m.group(1).strip():
+                    text = m.group(1).strip()
+            return text
 
         return f"Turn in {self.meta['ls_agent_runtime']}"
 
@@ -428,12 +435,54 @@ class LangSmithTracer:
 
         prompt = active_turn.get("prompt") or f"Turn in {self.meta['ls_agent_runtime']}"
         harness_title = self.meta["ls_agent_runtime"]
+        tools = active_turn.get("tools") or []
+
+        # If closing_message is empty, try to get last assistant text from transcript if available
+        if not closing_message:
+            transcript_path = self.event.get("transcript_path") or self.event.get("transcriptPath")
+            if transcript_path and os.path.exists(transcript_path):
+                try:
+                    from lib import transcript  # type: ignore
+                    facts = transcript.turn_facts(transcript.read_events(transcript_path))
+                    if facts.get("final_message"):
+                        closing_message = facts["final_message"]
+                except Exception:
+                    pass
+
+        assistant_text = closing_message or "Turn completed."
+
+        tool_calls = []
+        for i, t in enumerate(tools):
+            tool_calls.append({
+                "id": f"call_{i}_{t.get('name', 'tool')}",
+                "type": "function",
+                "function": {
+                    "name": t.get("name", "tool"),
+                    "arguments": json.dumps(t.get("inputs") or {}),
+                },
+            })
+
+        root_inputs = {
+            "messages": [{"role": "user", "content": prompt}],
+            "input": prompt,
+        }
+        root_outputs = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": assistant_text,
+                    "tool_calls": tool_calls,
+                }
+            ],
+            "output": assistant_text,
+        }
 
         # 1. Root Turn Run (chain)
         root_run = RunTree(
             name=f"{harness_title} Turn",
             run_type="chain",
-            inputs={"messages": [{"role": "user", "content": prompt}]},
+            inputs=root_inputs,
+            outputs=root_outputs,
             extra={
                 "metadata": {
                     "thread_id": self.session_id,
@@ -450,20 +499,7 @@ class LangSmithTracer:
         )
 
         # 2. Child LLM Run (llm)
-        tools = active_turn.get("tools") or []
-        tool_calls = []
-        for i, t in enumerate(tools):
-            tool_calls.append({
-                "id": f"call_{i}_{t.get('name', 'tool')}",
-                "type": "function",
-                "function": {
-                    "name": t.get("name", "tool"),
-                    "arguments": json.dumps(t.get("inputs") or {}),
-                },
-            })
-
-        assistant_text = closing_message or "Turn completed."
-        root_run.create_child(
+        llm_run = root_run.create_child(
             name="Model Invocation",
             run_type="llm",
             inputs={"messages": [{"role": "user", "content": prompt}]},
@@ -484,10 +520,15 @@ class LangSmithTracer:
                 }
             },
         )
+        if hasattr(llm_run, "end"):
+            try:
+                llm_run.end()
+            except Exception:
+                pass
 
         # 3. Child Tool Runs (tool)
         for i, t in enumerate(tools):
-            root_run.create_child(
+            child_tool = root_run.create_child(
                 name=t.get("name") or "tool",
                 run_type="tool",
                 inputs=t.get("inputs") or {},
@@ -500,10 +541,15 @@ class LangSmithTracer:
                     }
                 },
             )
+            if hasattr(child_tool, "end"):
+                try:
+                    child_tool.end(outputs=t.get("outputs") or {"output": ""})
+                except Exception:
+                    pass
 
         # 4. Child Middleware Runs (tool with ls_agent_type: "middleware")
         for mw in active_turn.get("middleware") or []:
-            root_run.create_child(
+            child_mw = root_run.create_child(
                 name=mw.get("name") or "jev:middleware",
                 run_type="tool",
                 inputs=mw.get("inputs") or {},
@@ -515,6 +561,17 @@ class LangSmithTracer:
                     }
                 },
             )
+            if hasattr(child_mw, "end"):
+                try:
+                    child_mw.end(outputs=mw.get("outputs") or {})
+                except Exception:
+                    pass
+
+        if hasattr(root_run, "end"):
+            try:
+                root_run.end(outputs=root_outputs)
+            except Exception:
+                pass
 
         # 5. Batch Post & Flush
         root_run.post(exclude_child_runs=False)
