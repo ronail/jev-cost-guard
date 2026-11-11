@@ -38,6 +38,10 @@ REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
 from lib import approvals, gates  # noqa: E402  (hooks/ is on sys.path above)
+try:
+    from lib import langsmith_tracer
+except Exception:
+    langsmith_tracer = None
 
 SERVER = os.environ.get("JEV_SERVER_PATH") or os.path.join(
     REPO_ROOT, "mcp", "jev", "server.py"
@@ -221,13 +225,20 @@ def main() -> None:
     if not isinstance(event, dict):
         sys.exit(0)
     host, tool, args, session, cwd = detect(event)
-    if not tool or gates.is_jev_tool(tool) or not gates.is_shell_tool(tool, args):
-        sys.exit(0)  # read-only tools and jev's own calls are never judged
+    tracer = langsmith_tracer.LangSmithTracer(event=event) if langsmith_tracer else None
+    if not tool or gates.is_jev_tool(tool):
+        sys.exit(0)
+    if not gates.is_shell_tool(tool, args):
+        if tracer:
+            tracer.record_pretool(tool_name=tool, command="", reasons=[], decision="allow", confidence=1.0)
+        sys.exit(0)  # read-only tools are never judged by jev
     command = gates.extract_command(args)
     if not command:
         sys.exit(0)
     reasons = gates.command_reasons(command)
     if not reasons:
+        if tracer:
+            tracer.record_pretool(tool_name=tool, command=command, reasons=[], decision="allow", confidence=1.0)
         sys.exit(0)  # tier 0 says this is routine: no request, no log line
     policy = load_policy()
     scope = (policy.get("cache") or {}).get("scope", "session")
@@ -279,6 +290,14 @@ def main() -> None:
         "answers": answers,
         "latency_ms": round((time.time() - started) * 1000),
     })
+    if tracer:
+        tracer.record_pretool(
+            tool_name=tool,
+            command=command,
+            reasons=reasons,
+            decision=decision or "allow",
+            confidence=gates.confidence_of((answers or {}).get("risk")) if answers else None,
+        )
     if policy.get("mode", "audit") == "audit":
         sys.exit(0)  # judged and logged, never enforced
     emit(host, decision, reason, policy)
